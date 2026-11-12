@@ -17,8 +17,8 @@ function storage:path(p)
     return p
 end
 
-function storage:read(path)
-    return util.read_file(self:path(path))
+function storage:read(path, max_bytes)
+    return util.read_file(self:path(path), max_bytes)
 end
 
 function storage:exists(path)

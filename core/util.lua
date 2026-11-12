@@ -88,11 +88,12 @@ function util.join_path(a, b)
     return (a:gsub("/+$", "")) .. "/" .. (b:gsub("^/+", ""))
 end
 
-function util.read_file(path)
+function util.read_file(path, max_bytes)
     local f = io.open(path, "rb")
     if not f then return nil, "cannot open " .. tostring(path) end
-    local data = f:read("*a")
+    local data = f:read(max_bytes and (max_bytes+1) or "*a")
     f:close()
+    if max_bytes and data and #data>max_bytes then return nil,"file exceeds size limit" end
     return data
 end
 
@@ -122,6 +123,16 @@ function util.path_exists(path)
 end
 
 -- UTF-8 与终端显示宽度：CJK 全角按 2 个单元计算。
+-- Keep UTF-8 boundaries while limiting layout work on unexpectedly huge titles.
+function util.utf8_prefix(text,limit)
+ if #text<=limit then return text end
+ local i=limit
+ while i>0 do local b=text:byte(i);if b<128 or b>=192 then break end;i=i-1 end
+ if i==0 then return '' end
+ local b=text:byte(i);local n=b<128 and 1 or (b<224 and 2 or (b<240 and 3 or 4))
+ return text:sub(1,i+n-1<=limit and limit or i-1)..'...'
+end
+
 function util.utf8_codepoints(s)
     local cps = {}
     local i = 1

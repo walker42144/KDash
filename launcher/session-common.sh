@@ -26,6 +26,9 @@ recover() {
     fi
     record_pid "$RUN/recover.pid" $$
     stop_app
+    for http_pid in "$RUN"/http/*.pid; do
+        if alive "$http_pid"; then kill -TERM "$p" 2>/dev/null || true; fi
+    done
     if alive "$RUN/power-control.pid"; then kill -TERM "$p" 2>/dev/null || true; fi
     if alive "$RUN/power-command.pid"; then kill -TERM "$p" 2>/dev/null || true; fi
     if alive "$RUN/power-monitor.pid"; then kill -TERM "$p" 2>/dev/null || true; fi

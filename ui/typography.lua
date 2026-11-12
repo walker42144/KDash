@@ -56,6 +56,16 @@ function Typo:fit(text, max_px, size)
     text = text or ""
     if self:measure(text, size) <= max_px then return text end
     local chars = util.utf8_codepoints(text)
+    if self.measure_fn then
+        local lo,hi=0,#chars
+        while lo<hi do
+            local n=math.floor((lo+hi+1)/2);local last=chars[n]
+            local candidate=text:sub(1,last.byte+last.len-1).."..."
+            if self:measure(candidate,size)<=max_px then lo=n else hi=n-1 end
+        end
+        if lo==0 then return self:measure("...",size)<=max_px and "..." or "" end
+        local last=chars[lo];return text:sub(1,last.byte+last.len-1).."..."
+    end
     local ell_w = self:measure("...", size)
     local budget = max_px - ell_w
     if budget <= 0 then return "" end

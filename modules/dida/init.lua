@@ -116,37 +116,66 @@ function M.render(ctx,ui,rect,opts)
  ui:progress({x=rect.x,y=by,w=rect.w,h=t.line*3},pending+done>0 and math.floor(done*100/(pending+done)) or 0)
  local y=by+t.line*3+t.space.sm;local row_h=math.max(44,ui.typo:line_height(32))
  local status_h=math.max(40,ui.typo:line_height(micro))
- local max_rows=math.max(1,math.floor((rect.y+rect.h-y-status_h)/row_h))
- local rows=rows_for(view,ctx,selected);local pages=math.max(1,math.ceil(#rows/max_rows));state.page=math.min(state.page,pages)
- local first=(state.page-1)*max_rows+1
- for i=first,math.min(#rows,first+max_rows-1) do
-  local row=rows[i];local task,item=row.task,row.item;local indent=math.min(row.depth,4)*32
-  local rr={x=rect.x+indent,y=y,w=rect.w-indent,h=row_h}
+ local available=rect.y+rect.h-y-status_h
+ local rows=rows_for(view,ctx,selected);local page_rows={{}};local used=0
+ for _,row in ipairs(rows) do
+  local task,item=row.task,row.item;local indent=math.min(row.depth,4)*32
+  row.title=item and item.title or task.title
+  if task.context_only then row.title='所属任务：'..row.title end
+  row.meta=task.context_only and '今日子任务' or (not item and row.total>0 and (string.format('%d/%d ',row.done,row.total)..(state.expanded[key(task)] and '收起' or '展开')) or nil)
+  row.priority=task.context_only and 0 or (item and (item.priority or 0) or task.priority)
+  row.reserved=ui:priority_reserve(row.priority)
+  row.opts={size=(item or row.depth>0) and 28 or 32,badges=task.context_only and {} or require('services.task_metadata').badges(item or task,ctx.config.data.utc_offset_minutes or 480)}
+  row.indent=indent;row.width=rect.w-indent-row.reserved
+  -- A task with unusually many tags can continue on later pages without
+  -- painting over the footer. Continuations have no completion checkbox.
+  local chunks={};local all=row.opts.badges;local cursor=1;local first_chunk=true
+  repeat
+   local chunk={};for k,v in pairs(row) do chunk[k]=v end
+   chunk.opts={size=row.opts.size,badges={},no_checkbox=not first_chunk}
+   chunk.continuation=not first_chunk
+   if not first_chunk then chunk.title=row.title..'（续）';chunk.meta=nil end
+   while cursor<=#all do
+    chunk.opts.badges[#chunk.opts.badges+1]=all[cursor]
+    if ui:task_layout({w=row.width},chunk.title,chunk.meta,chunk.opts).h>available and #chunk.opts.badges>1 then
+     table.remove(chunk.opts.badges);break
+    end
+    cursor=cursor+1
+   end
+   chunk.h=ui:task_layout({w=row.width},chunk.title,chunk.meta,chunk.opts).h
+   chunks[#chunks+1]=chunk;first_chunk=false
+  until cursor>#all
+  for _,chunk in ipairs(chunks) do
+   if used+chunk.h>available and #page_rows[#page_rows]>0 then page_rows[#page_rows+1]={};used=0 end
+   page_rows[#page_rows][#page_rows[#page_rows]+1]=chunk;used=used+chunk.h
+  end
+ end
+ local pages=#page_rows;state.pages=pages;state.page=math.max(1,math.min(state.page,pages))
+ for _,row in ipairs(page_rows[state.page]) do
+  local task,item=row.task,row.item
+  local rr={x=rect.x+row.indent,y=y,w=rect.w-row.indent,h=44}
   local completed=item and tonumber(item.status)==1 or (not item and task.completed)
-  local title=item and item.title or task.title
-  if task.context_only then title='所属任务：'..title end
-  local meta=task.context_only and '今日子任务' or (not item and row.total>0 and (string.format('%d/%d ',row.done,row.total)..(state.expanded[key(task)] and '收起' or '展开')) or nil)
-  local reserved=ui:priority_marks(rr,task.context_only and 0 or (item and (item.priority or 0) or task.priority))
-  ui:task_row({x=rr.x,y=rr.y,w=rr.w-reserved,h=rr.h},title,meta,completed,{size=(item or row.depth>0) and 28 or 32})
-  if not task.context_only and not completed and task.id and task.project_id and (not item or item.id) then
-   ui:hit({x=rr.x,y=y,w=56,h=row_h},'module_action',{module='dida',kind='complete',project_id=task.project_id,task_id=task.id,item_id=item and item.id,expected_due=task.source_due},'complete')
+  if not row.continuation then ui:priority_marks(rr,row.priority) end
+  ui:task_with_badges({x=rr.x,y=y,w=row.width,h=row.h},row.title,row.meta,completed,row.opts)
+  if not row.continuation and not task.context_only and not completed and task.id and task.project_id and (not item or item.id) then
+   ui:hit({x=rr.x,y=y,w=56,h=44},'module_action',{module='dida',kind='complete',project_id=task.project_id,task_id=task.id,item_id=item and item.id,expected_due=task.source_due},'complete')
   end
-  if not item and not task.context_only and row.total>0 then
-   ui:hit({x=rr.x+56,y=y,w=rr.w-56,h=row_h},'module_action',{module='dida',kind='expand',key=key(task)},'expand')
+  if not row.continuation and not item and not task.context_only and row.total>0 then
+   ui:hit({x=rr.x+56,y=y,w=rr.w-56,h=row.h},'module_action',{module='dida',kind='expand',key=key(task)},'expand')
   end
-  y=y+row_h
+  y=y+row.h
  end
  if #rows==0 then ui:empty({x=rect.x,y=y,w=rect.w,h=row_h*2},'今天没有待办任务') end
  local status=state.notice or (state.error and '同步失败，保留缓存；点击空白处刷新') or (state.cached_at and ('同步于 '..timeutil.format_time(state.cached_at,ctx.config.data.utc_offset_minutes or 480,true))) or '尚未同步'
- local sy=rect.y+rect.h-status_h;local nav_w=pages>1 and 300 or 0
- ui:text({text=ui.typo:fit(status,rect.w-nav_w,micro),x=rect.x,y=sy,w=rect.w-nav_w,size=micro,color=t.colors.muted})
- if pages>1 then
-  local x=rect.x+rect.w-300
-  for _,b in ipairs({{label='上一页',delta=-1,x=x},{label='下一页',delta=1,x=x+200}}) do
-   ui:text({text=b.label,x=b.x,y=sy,w=100,size=micro,align='center'})
-   ui:hit({x=b.x,y=sy-4,w=100,h=status_h+4},'module_action',{module='dida',kind='page',delta=b.delta},'task-page')
-  end
-  ui:text({text=state.page..'/'..pages,x=x+100,y=sy,w=100,size=micro,align='center'})
+ local sy=rect.y+rect.h-status_h;local nav_w=250
+ ui:text({text=ui.typo:fit(status,rect.w-nav_w-16,micro),x=rect.x,y=sy+7,w=rect.w-nav_w-16,size=micro,color=t.colors.muted})
+ local x=rect.x+rect.w-nav_w
+ for _,b in ipairs({{label='上',delta=-1,x=x,enabled=state.page>1},{label='下',delta=1,x=x+180,enabled=state.page<pages}}) do
+  local box={x=b.x,y=sy,w=70,h=40};local color=b.enabled and t.colors.ink or t.colors.faint
+  ui:rounded_box(box,6,color)
+  ui:text({text=b.label,x=box.x,y=box.y,w=box.w,h=box.h,size=24,align='center',valign='center',color=color})
+  ui:hit(box,b.enabled and 'module_action' or 'noop',b.enabled and {module='dida',kind='page',delta=b.delta} or nil,'task-page')
  end
+ ui:text({text=state.page..'/'..pages,x=x+70,y=sy+7,w=110,size=micro,align='center'})
 end
 return M

@@ -19,7 +19,7 @@ return function(T)
   return ok,err,view,calls,output
  end
  T.test('all-list sync explicitly reads omitted inbox and preserves concrete project ID',function()
-  local ok,err,v,calls=sync({});T.truthy(ok,err);T.eq(#calls,3);T.eq(#v.today,1)
+  local ok,err,v,calls,output=sync({});T.eq(output.data.project_data,nil);T.truthy(ok,err);T.eq(#calls,3);T.eq(#v.today,1)
   T.eq(v.today[1].project_id,'inbox123');T.eq(v.today[1].project,'收集箱');T.eq(v.today[1].priority,5)
  end)
  T.test('explicit normal-list selection excludes inbox without changing filter meaning',function()

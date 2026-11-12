@@ -1,6 +1,7 @@
 #!/bin/sh
 # Detached supervisor. USB deployment does not install/register a KPM package.
 set -u
+umask 077
 PKG=$(CDPATH='' cd "$(dirname "$0")/.." && pwd -P)
 DATA=/mnt/us/kdash-candidate
 BASE=/var/tmp/kdash-candidate
@@ -71,7 +72,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'RC=143; exit 143' INT HUP TERM
-log "session_begin version=0.1.1-candidate1 revision=r13-inbox-startup-weather run=$RUN"
+log "session_begin version=0.1.1-candidate1 revision=r14-task-badges-runtime run=$RUN"
 # All compatibility checks happen before stopping the GUI.
 for cmd in setsid pidof lipc-get-prop lipc-set-prop lipc-wait-event awk; do command -v "$cmd" >/dev/null 2>&1 || { log "missing $cmd"; exit 2; }; done
 cp "$PKG/runtime/luajit" "$RUN/luajit" && cp "$PKG/runtime/fbink" "$RUN/fbink" || exit 2
@@ -141,6 +142,8 @@ alive "$RUN/power-monitor.pid" || { cat "$RUN/power.stderr" >> "$LOG"; log 'powe
 /bin/sh "$RUN/power-control.sh" "$RUN" >> "$LOG" 2>&1 &
 controller=$!;record_pid "$RUN/power-control.pid" "$controller"
 : > "$RUN/power-control.ready"
+mkdir -p "$RUN/http" || exit 4
+export KDASH_HTTP_DIR="$RUN/http"
 export KDASH_POWER_RUN="$RUN"
 export KDASH_POWER_EVENTS="$RUN/power.events"
 export KDASH_FBINK="$RUN/fbink"

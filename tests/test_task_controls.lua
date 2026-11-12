@@ -61,9 +61,9 @@ return function(T)
    render();local next_hit
    for _,h in ipairs(events.hits) do
     if h.label=='complete' then seen[h.payload.task_id]=true end
-    if h.label=='task-page' and h.payload.delta==1 then next_hit=h end
+    if h.label=='task-page' and h.payload and h.payload.delta==1 then next_hit=h end
    end
-   T.truthy(next_hit);M.on_action(ctx,next_hit.payload)
+   if next_hit then M.on_action(ctx,next_hit.payload) else break end
   end
   local total=0;for _ in pairs(seen) do total=total+1 end
   T.eq(total,20);T.eq(#requests,0,'paging is local')
@@ -94,6 +94,22 @@ return function(T)
    if h.label=='complete' then T.eq(h.payload.task_id,'child');child=true end
   end
   T.truthy(child);T.eq(#requests,0)
+ end)
+
+ T.test('many tags continue across local pages without touching status line or repeating completion controls',function()
+  local M,ctx,view,requests,events,render=fixture()
+  local parent=view.today[1];parent.children={};parent.checklist={};parent.tags={}
+  for i=1,80 do parent.tags[i]='标签'..i end
+  local complete_count=0;local seen_pages=0
+  for page=1,30 do
+   render();seen_pages=seen_pages+1;local next_hit
+   for _,h in ipairs(events.hits) do
+    if h.label=='complete' then complete_count=complete_count+1;T.truthy(h.y+h.h<=900) end
+    if h.label=='task-page' and h.payload and h.payload.delta==1 then next_hit=h end
+   end
+   if not next_hit then break end;M.on_action(ctx,next_hit.payload)
+  end
+  T.truthy(seen_pages>1);T.eq(complete_count,1);T.eq(#requests,0)
  end)
 
 end

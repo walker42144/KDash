@@ -21,7 +21,7 @@ int FT_Load_Char(kd_ft_face,unsigned long,int);
 ]]
 local F={};F.__index=F
 function F.new(opts)
- local self=setmetatable({faces={},cache={},cache_n=0},F)
+ local self=setmetatable({faces={},cache={},cache_n=0,cache_bytes=0,max_cache_bytes=opts.max_cache_bytes or 6*1024*1024},F)
  if ffi.os=='Linux' then self.zlib=ffi.load(os.getenv('KDASH_ZLIB') or '/mnt/us/koreader/libs/libz.so.1',true) end
  self.lib=ffi.load(opts.library or os.getenv('KDASH_FREETYPE') or '/mnt/us/koreader/libs/libfreetype.so.6')
  local p=ffi.new('void*[1]');assert(self.lib.FT_Init_FreeType(p)==0,'FreeType init failed');self.handle=p[0]
@@ -36,7 +36,7 @@ function F:face(path)
  self.faces[path]=p[0];return p[0]
 end
 function F:glyph(cp,size,explicit)
- size=math.max(8,math.floor(size));local path=explicit
+ size=math.max(8,math.floor(size));assert(size<=512,'font size exceeds reviewed limit');local path=explicit
  if not path then
   path=(cp<0x2e80) and (size>=48 and self.display or self.latin) or self.cjk
   if self.lib.FT_Get_Char_Index(self:face(path),cp)==0 then path=self.cjk end
@@ -46,17 +46,20 @@ function F:glyph(cp,size,explicit)
  assert(self.lib.FT_Load_Char(face,cp,4)==0,'glyph rendering failed')
  local slot=face.glyph;local b=slot.bitmap
  assert(b.pixel_mode==2 or b.width==0,'unexpected FreeType bitmap mode')
+ assert(tonumber(b.rows)*tonumber(b.width)<=1024*1024,'glyph bitmap exceeds size limit')
  local pixels={}
  for y=0,tonumber(b.rows)-1 do pixels[#pixels+1]=ffi.string(b.buffer+y*b.pitch,tonumber(b.width)) end
  local result={w=tonumber(b.width),h=tonumber(b.rows),left=slot.bitmap_left,top=slot.bitmap_top,advance=tonumber(slot.advance.x)/64,pixels=table.concat(pixels)}
- if self.cache_n>1800 then self.cache={};self.cache_n=0 end
- self.cache[key]=result;self.cache_n=self.cache_n+1;return result
+ local bytes=#result.pixels+128+#key
+ if self.cache_n>=1800 or self.cache_bytes+bytes>self.max_cache_bytes then self.cache={};self.cache_n=0;self.cache_bytes=0 end
+ if bytes<=self.max_cache_bytes then self.cache[key]=result;self.cache_n=self.cache_n+1;self.cache_bytes=self.cache_bytes+bytes end;return result
 end
 function F:measure(text,size,explicit)
  local n=0;for _,ch in ipairs(require('core.util').utf8_codepoints(text or '')) do n=n+self:glyph(ch.cp,size,explicit).advance end
  return math.ceil(n)
 end
 function F:close()
+ self.cache={};self.cache_n=0;self.cache_bytes=0
  for _,face in pairs(self.faces) do self.lib.FT_Done_Face(face) end;self.faces={}
  if self.handle then self.lib.FT_Done_FreeType(self.handle);self.handle=nil end
 end

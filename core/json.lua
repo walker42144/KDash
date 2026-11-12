@@ -207,13 +207,13 @@ end
 
 local parse_value
 
-local function parse_array(s, i)
+local function parse_array(s, i, depth)
     local arr = json.array({})
     i = skip_ws(s, i + 1)
     if s:sub(i, i) == ']' then return arr, i + 1 end
     while true do
         local v
-        v, i = parse_value(s, i)
+        v, i = parse_value(s, i, depth+1)
         arr[#arr + 1] = v
         i = skip_ws(s, i)
         local c = s:sub(i, i)
@@ -227,7 +227,7 @@ local function parse_array(s, i)
     end
 end
 
-local function parse_object(s, i)
+local function parse_object(s, i, depth)
     local obj = json.object({})
     i = skip_ws(s, i + 1)
     if s:sub(i, i) == '}' then return obj, i + 1 end
@@ -239,7 +239,7 @@ local function parse_object(s, i)
         if s:sub(i, i) ~= ':' then error("expected ':' at " .. i) end
         i = skip_ws(s, i + 1)
         local v
-        v, i = parse_value(s, i)
+        v, i = parse_value(s, i, depth+1)
         obj[key] = v
         i = skip_ws(s, i)
         local c = s:sub(i, i)
@@ -253,13 +253,15 @@ local function parse_object(s, i)
     end
 end
 
-parse_value = function(s, i)
+parse_value = function(s, i, depth)
+    depth=depth or 0
+    if depth>64 then error("JSON nesting exceeds 64 levels") end
     i = skip_ws(s, i)
     local c = s:sub(i, i)
     if c == '{' then
-        return parse_object(s, i)
+        return parse_object(s, i, depth)
     elseif c == '[' then
-        return parse_array(s, i)
+        return parse_array(s, i, depth)
     elseif c == '"' then
         return parse_string(s, i)
     elseif c == 't' then

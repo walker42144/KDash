@@ -52,4 +52,11 @@ function Runner:spawn_script(script_path)
     return os.execute(cmd)
 end
 
+-- Only terminate an owned curl PID if its kernel start time still matches.
+function Runner:stop_http(pidfile)
+ local cmd="if [ -r "..util.shell_quote(pidfile).." ]; then read p stamp < "..util.shell_quote(pidfile).."; "
+  .."case \"$p:$stamp\" in *[!0-9:]*|:|*:) exit 0;; esac; "
+  .."if [ \"$(awk '{print $22}' /proc/$p/stat 2>/dev/null)\" = \"$stamp\" ]; then kill -TERM \"$p\" 2>/dev/null || true; fi; fi"
+ return self:run_shell(cmd)
+end
 return Runner

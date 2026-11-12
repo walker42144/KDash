@@ -9,6 +9,7 @@ local files = {
     "test_power_sleep",
     "test_r12",
     "test_r13",
+    "test_r14",
     "test_geometry",
     "test_device",
     "test_amap",

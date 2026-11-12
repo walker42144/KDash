@@ -241,7 +241,7 @@ local function main()
     local http = Http.new({
         runner = runner,
         storage = storage,
-        dir = "/tmp",
+        dir = os.getenv("KDASH_HTTP_DIR") or "/tmp",
         log = log,
         now = function() return clock:now() end,
         curl = os.getenv("KDASH_CURL") or "curl",

@@ -157,6 +157,12 @@ function UI:error(rect, err)
     end
 end
 
+function UI:priority_reserve(priority)
+ if not ({[1]=true,[3]=true,[5]=true})[tonumber(priority)] then return 0 end
+ local scale=self.theme.scale or 1
+ return 3*math.max(1,math.floor(9*scale+.5))+2*math.max(1,math.floor(7*scale+.5))+self.theme.space.sm
+end
+
 -- KPW3 is 300dpi: 9px ~= 0.76mm. Priority values: 0/1/3/5.
 function UI:priority_marks(rect,priority)
     local count=({[1]=1,[3]=2,[5]=3})[tonumber(priority)] or 0
@@ -167,7 +173,53 @@ function UI:priority_marks(rect,priority)
     local occupied=count*width+(count-1)*gap
     local x=rect.x+rect.w-occupied;local y=rect.y+math.floor((rect.h-height)/2)
     for i=0,count-1 do self:fill({x=x+i*(width+gap),y=y,w=width,h=height},self.theme.colors.ink) end
-    return 3*width+2*gap+self.theme.space.sm
+    return self:priority_reserve(priority)
+end
+
+-- Bounds shared by pagination and rendering. The caller already reserves priority.
+function UI:rounded_box(r,radius,color)
+ if not self.display.line then self:box(r,false,color);return end
+ local d=self.display;local x,y,w,h=r.x,r.y,r.w,r.h;local rr=math.min(radius,w/2,h/2);local c=color or self.theme.colors.ink
+ d:hline(x+rr,y,w-2*rr,2,c);d:hline(x+rr,y+h-2,w-2*rr,2,c)
+ d:vline(x,y+rr,h-2*rr,2,c);d:vline(x+w-2,y+rr,h-2*rr,2,c)
+ for _,corner in ipairs({{x+rr,y+rr,180},{x+w-rr-2,y+rr,270},{x+w-rr-2,y+h-rr-2,0},{x+rr,y+h-rr-2,90}}) do
+  local last
+  for i=0,8 do local a=(corner[3]+i*90/8)*math.pi/180;local px,py=corner[1]+rr*math.cos(a),corner[2]+rr*math.sin(a)
+   if last then d:line(last[1],last[2],px,py,c,1.5) end;last={px,py}
+  end
+ end
+end
+function UI:task_layout(rect,title,meta,opts)
+ opts=opts or {};local size=opts.size or 32;local left=22+self.theme.space.sm
+ local mw=(meta and meta~='') and self.typo:measure(meta,self.theme.type.micro)+16 or 0
+ local usable=math.max(1,rect.w-left-mw-4);local badges={};local total=0
+ for _,b in ipairs(opts.badges or {}) do
+  local fs=b.kind=='time' and 24 or 22;local max=math.min(240,usable)
+  local label=self.typo:fit(util.utf8_prefix(b.text,1024),math.max(1,max-22),fs)
+  local width=math.min(max,self.typo:measure(label,fs)+22)
+  badges[#badges+1]={text=label,kind=b.kind,w=width,size=fs};total=total+width+10
+ end
+ local title_w=#badges>0 and math.min(usable,math.max(math.min(240,usable*.5),usable-total-12)) or usable
+ local fitted=self.typo:fit(util.utf8_prefix(title or '',8192),title_w,size)
+ local cursor=self.typo:measure(fitted,size)+12;local line=0
+ for _,b in ipairs(badges) do
+  if cursor+b.w>usable then line=line+1;cursor=0 end
+  b.x=left+cursor;b.y=line*40;cursor=cursor+b.w+10
+ end
+ return {title=fitted,title_w=title_w,left=left,badges=badges,h=math.max(44,(line+1)*40+4),size=size,meta=meta}
+end
+function UI:task_with_badges(rect,title,meta,checked,opts)
+ opts=opts or {}
+ local layout=self:task_layout(rect,title,meta,opts);local first=44
+ if not opts.no_checkbox then self:checkbox(rect.x,rect.y+11,checked,22) end
+ self:text({text=layout.title,x=rect.x+layout.left,y=rect.y+(first-layout.size)/2,w=layout.title_w,size=layout.size})
+ for _,b in ipairs(layout.badges) do
+  local box={x=rect.x+b.x,y=rect.y+b.y+5,w=b.w,h=34}
+  self:rounded_box(box,b.kind=='tag' and 16 or 6,self.theme.colors.ink)
+  self:text({text=b.text,x=box.x,y=box.y,w=box.w,h=box.h,size=b.size,align='center',valign='center'})
+ end
+ if meta and meta~='' then self:text({text=meta,x=rect.x,y=rect.y+(first-self.theme.type.micro)/2,w=rect.w,size=self.theme.type.micro,align='right'}) end
+ return layout.h
 end
 
 function UI:task_row(rect, title, meta, checked, opts)

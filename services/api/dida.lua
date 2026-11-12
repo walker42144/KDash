@@ -124,16 +124,17 @@ function Dida:_api_get(path, cb)
         end
         local data, err = parse_json_body(res.body)
         if not data then cb(false, err) return end
-        cb(true, nil, data, res.status)
+        cb(true, nil, data, res.status, #(res.body or ""))
     end)
 end
 
 local function task_time_key(task, offset)
+    local raw=type(task.dueDate)=="string" and task.dueDate or task.startDate
     if task.isAllDay == true or task.isAllDay == "true" then
-        local date = tostring(task.dueDate or ""):match("^(%d%d%d%d%-%d%d%-%d%d)")
+        local date = tostring(raw or ""):match("^(%d%d%d%d%-%d%d%-%d%d)")
         if date then return date end
     end
-    local ts = timeutil.parse_iso8601(task.dueDate)
+    local ts = timeutil.parse_iso8601(raw)
     if not ts then return nil end
     return timeutil.date_key(ts, offset)
 end
@@ -155,15 +156,16 @@ local PRIORITY = { [5] = "HIGH", [3] = "MED", [1] = "LOW", [0] = "NONE" }
 -- 纯函数：把 API 数据转换为 UI 视图（可单测）。
 function Dida.build_view(projects, project_data, now, offset, opts)
     opts=opts or {};local today=timeutil.date_key(now,offset)
-    local names,map,raw={},{},{}
+    local names,map,raw={},{},{};local task_count=0
     for _,p in ipairs(projects or {}) do names[p.id]=p.name end
     for project_id,data in pairs(project_data or {}) do
         for _,t in ipairs(data.tasks or {}) do
+            task_count=task_count+1;if task_count>2000 then error("task count exceeds device limit") end
             local pid=t.projectId or project_id;local key=pid..":"..tostring(t.id)
             raw[key]=t
             map[key]={id=t.id,project_id=pid,project=names[pid] or (pid:match('^inbox') and '收集箱') or pid,title=t.title or t.content or "(untitled)",
                 priority=tonumber(t.priority) or 0,priority_label=PRIORITY[tonumber(t.priority) or 0],
-                due_key=task_time_key(t,offset),own_due_key=task_time_key(t,offset),date_metadata=true,source_due=t.dueDate,repeat_flag=t.repeatFlag,tags=t.tags or {},parent_id=type(t.parentId)=="string" and t.parentId~="" and t.parentId or nil,
+                due_key=task_time_key(t,offset),own_due_key=task_time_key(t,offset),date_metadata=true,source_due=t.dueDate,source_start=t.startDate,is_all_day=t.isAllDay,repeat_flag=t.repeatFlag,tags=t.tags or {},parent_id=type(t.parentId)=="string" and t.parentId~="" and t.parentId or nil,
                 completed=tonumber(t.status)==2,children={},checklist=util.deep_copy(t.items or {})}
         end
     end
@@ -173,8 +175,9 @@ function Dida.build_view(projects, project_data, now, offset, opts)
         local parent=item.parent_id and map[item.project_id..":"..item.parent_id]
         if parent and parent~=item and not parent.completed then
             -- Reject cyclic parent chains instead of recursing forever.
-            local cur,seen=parent,{};local cycle=false
+            local cur,seen=parent,{};local cycle=false;local depth=0
             while cur do
+                depth=depth+1;if depth>24 then error("task hierarchy exceeds device limit") end
                 if cur==item or seen[cur] then cycle=true;break end
                 seen[cur]=true;cur=cur.parent_id and map[cur.project_id..":"..cur.parent_id]
             end
@@ -331,8 +334,23 @@ function Dida:complete(target,cb)
     else start() end
 end
 
+-- Drop descriptions/attachments from the read-only display snapshot. Writes
+-- still fetch the complete current server task immediately before submission.
+local function display_data(data)
+ local out={tasks={}}
+ local fields={'id','projectId','title','dueDate','startDate','isAllDay','priority','status','completedTime','repeatFlag','tags','parentId','childIds','items'}
+ for _,task in ipairs(type(data.tasks)=='table' and data.tasks or {}) do
+  local slim={};for _,name in ipairs(fields) do slim[name]=task[name] end
+  slim.title=slim.title or task.content or '(untitled)'
+  out.tasks[#out.tasks+1]=slim
+ end
+ return out
+end
+
 -- 同步：刷新 token（如需）→ 项目列表 → 逐个项目取数据。
 function Dida:sync(cb)
+    local started=self.now();local finished=false;local callback=cb
+    cb=function(...) if finished then return end;finished=true;return callback(...) end
     local cfg = self.config:module("dida")
     local function start()
         self:_api_get("/project", function(ok, err, projects, status)
@@ -362,15 +380,17 @@ function Dida:sync(cb)
                 end
             end
             if #selected > 25 then
-                for i = #selected, 26, -1 do table.remove(selected, i) end
+                cb(false,"TOO_MANY_PROJECTS_SELECT_UP_TO_25");return
             end
-            local datas = {}
+            local datas = {};local data_bytes=0
             local index = 1
             local function next_project()
+                if self.now()-started>90 then cb(false,"SYNC_TIMEOUT");return end
                 if index > #selected then
-                    local view = Dida.build_view(projects, datas, self.now(), self.offset, cfg)
+                    local built,view=pcall(Dida.build_view,projects,datas,self.now(),self.offset,cfg)
+                    if not built then cb(false,"TASK_DATA_LIMIT_OR_INVALID");return end
                     self.cache:write("dida", {
-                        data = { view = view, projects = projects, project_data = datas },
+                        data = { view = view },
                         fetched_at = self.now(),
                     })
                     if self.log then self.log:info('dida sync complete projects='..#selected..' today='..#view.today) end
@@ -379,12 +399,14 @@ function Dida:sync(cb)
                 end
                 local p = selected[index]
                 index = index + 1
-                self:_api_get("/project/" .. p.id .. "/data", function(ok2, err2, data, st)
+                self:_api_get("/project/" .. p.id .. "/data", function(ok2, err2, data, st, response_bytes)
                     if not ok2 then
                         cb(false, "project " .. tostring(p.name or p.id) .. ": " .. tostring(err2))
                         return
                     end
-                    if type(data) == "table" then datas[p.id] = data end
+                    data_bytes=data_bytes+(response_bytes or 0)
+                    if data_bytes>4*1024*1024 then cb(false,"SYNC_DATA_EXCEEDS_DEVICE_LIMIT");return end
+                    if type(data) == "table" then datas[p.id] = display_data(data) end
                     next_project()
                 end)
             end

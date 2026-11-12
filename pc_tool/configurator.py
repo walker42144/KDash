@@ -39,7 +39,7 @@ class ConfigApp:
   ttk.Label(frames['event'],text='按目标日期计算剩余天数。当天显示“今天”。',style='Muted.TLabel').grid(row=4,column=0,columnspan=3,sticky='w')
   d=frames['dida'];self.visibility(d,0,'dida_enabled','Kindle 上的滴答清单')
   self.entry(d,1,'dida_access_token','API 口令 / Access Token',secret=True)
-  ttk.Label(d,text='展示范围：仅今天，不含逾期、未来和无日期任务。保留今日任务的清单子项，独立子任务按日期筛选。\n已有可用令牌时，只需填写这一项。点击下方按钮验证连接并选择清单。\n“显示”启用同步并显示数据；“隐藏”停止同步，首页保留该分区的配置提示。',style='Muted.TLabel',wraplength=650).grid(row=2,column=0,columnspan=3,sticky='w',pady=12)
+  ttk.Label(d,text='展示范围：仅今天，不含逾期、未来和无日期任务。保留今日任务的清单子项，独立子任务按日期筛选。\n显示顺序：任务 → 时间圆角框 → 标签胶囊；右侧保留重要程度。底部“上/下”本地翻页。\n已有可用令牌时，只需填写这一项。点击下方按钮验证连接并选择清单。\n“显示”启用同步并显示数据；“隐藏”停止同步，首页保留该分区的配置提示。',style='Muted.TLabel',wraplength=650).grid(row=2,column=0,columnspan=3,sticky='w',pady=12)
   ttk.Button(d,text='测试连接并选择清单',command=self.fetch_projects).grid(row=3,column=1,sticky='w',pady=10)
   self.project_summary=tk.StringVar()
   ttk.Label(d,textvariable=self.project_summary,style='Muted.TLabel',wraplength=650).grid(row=4,column=0,columnspan=3,sticky='w',pady=8)
@@ -200,7 +200,9 @@ class ConfigApp:
    while True:
     cb,value,error=self.queue.get_nowait();self.busy=False;self.save_button.state(['!disabled'])
     if error:self.status.set(error);messagebox.showerror('连接未完成',error,parent=self.root)
-    else:cb(value)
+    else:
+     try:cb(value)
+     except Exception:self.status.set('返回数据处理失败，请检查配置后重试')
   except queue.Empty:pass
   self.root.after(150,self.drain)
  def authorize(self):

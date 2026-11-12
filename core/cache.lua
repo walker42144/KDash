@@ -21,7 +21,7 @@ function Cache:path(name)
 end
 
 function Cache:read(name)
-    local data = self.storage:read(self:path(name))
+    local data = self.storage:read(self:path(name),4*1024*1024)
     if not data then return nil end
     local ok, value = pcall(json.decode, data)
     if not ok then
@@ -42,6 +42,7 @@ function Cache:write(name, payload)
     }
     local ok, encoded = pcall(json.encode, env, false)
     if not ok then return false, encoded end
+    if #encoded>4*1024*1024 then return false,"cache exceeds size limit" end
     local wrote, err = self.storage:write_atomic(self:path(name), encoded)
     if not wrote and self.log then
         self.log:warn("cache write failed: " .. name .. ": " .. tostring(err))

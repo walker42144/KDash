@@ -1,0 +1,12 @@
+{
+  "id": "dida",
+  "name": "Dida Tasks",
+  "display_title": "TODAY'S TASKS",
+  "version": "1.0.0",
+  "api_version": 1,
+  "order": 30,
+  "enabled": true,
+  "permissions": ["network", "secrets"],
+  "refresh": { "interval": 900, "max_backoff": 3600 },
+  "layout": { "min_height": 220, "show_title": true }
+}

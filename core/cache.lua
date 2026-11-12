@@ -1,0 +1,66 @@
+-- 模块数据缓存：JSON 文件，带抓取时间与错误状态；原子写入。
+local json = require("core.json")
+
+local Cache = {}
+Cache.__index = Cache
+
+function Cache.new(opts)
+    local self = setmetatable({}, Cache)
+    self.dir = opts.dir
+    self.storage = opts.storage
+    self.log = opts.log
+    return self
+end
+
+local function safe_name(name)
+    return name:gsub("[^%w%-_%.]", "_")
+end
+
+function Cache:path(name)
+    return self.dir .. "/" .. safe_name(name) .. ".json"
+end
+
+function Cache:read(name)
+    local data = self.storage:read(self:path(name),4*1024*1024)
+    if not data then return nil end
+    local ok, value = pcall(json.decode, data)
+    if not ok then
+        if self.log then self.log:warn("cache parse failed: " .. name .. ": " .. tostring(value)) end
+        return nil
+    end
+    if type(value)~='table' or value==json.null or (value.cache_version~=nil and value.cache_version~=1)
+        or type(value.data)~='table' or type(value.fetched_at)~='number' then return nil end
+    return value
+end
+
+function Cache:write(name, payload)
+    local env = {
+        cache_version = 1,
+        saved_at = os.time(),
+        data = payload.data,
+        fetched_at = payload.fetched_at or os.time(),
+        error = payload.error,
+        status = payload.status,
+    }
+    local ok, encoded = pcall(json.encode, env, false)
+    if not ok then return false, encoded end
+    if #encoded>4*1024*1024 then return false,"cache exceeds size limit" end
+    if not pcall(json.decode,encoded) then return false,'cache exceeds JSON decoder limits' end
+    local wrote, err = self.storage:write_atomic(self:path(name), encoded)
+    if not wrote and self.log then
+        self.log:warn("cache write failed: " .. name .. ": " .. tostring(err))
+    end
+    return wrote, err
+end
+
+function Cache:clear(name)
+    self.storage:remove(self:path(name))
+end
+
+function Cache:age(name, now)
+    local env = self:read(name)
+    if not env or not env.fetched_at then return nil end
+    return (now or os.time()) - env.fetched_at
+end
+
+return Cache

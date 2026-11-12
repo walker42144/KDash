@@ -1,0 +1,12 @@
+{
+  "id": "countdown",
+  "name": "Countdown",
+  "display_title": "COUNTDOWN",
+  "version": "1.0.0",
+  "api_version": 1,
+  "order": 20,
+  "enabled": true,
+  "permissions": [],
+  "refresh": { "interval": 60, "align": "minute" },
+  "layout": { "min_height": 230, "show_title": true }
+}

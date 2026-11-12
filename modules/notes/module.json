@@ -1,0 +1,12 @@
+{
+  "id": "notes",
+  "name": "Notes",
+  "display_title": "NOTES",
+  "version": "1.0.0",
+  "api_version": 1,
+  "order": 60,
+  "enabled": true,
+  "permissions": [],
+  "refresh": { "interval": 300 },
+  "layout": { "min_height": 150, "show_title": true }
+}

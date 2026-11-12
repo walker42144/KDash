@@ -1,0 +1,16 @@
+# 本地配置和生成物
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+secrets.json
+config-backups/
+cache/
+logs/
+state/
+*.pending
+build/
+dist/
+*.spec
+**/config.json

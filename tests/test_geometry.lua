@@ -1,0 +1,18 @@
+return function(T)
+ local Paths=require('platform.kindle.paths')
+ local state='viewWidth=1072;viewHeight=1448;screenWidth=1072;screenHeight=1448;BPP=8;lineLength=1088;currentRota=3;'
+ T.test('visible geometry ignores stride and virtual buffer allocation',function()
+  local w,h=Paths.parse_fbink_state(state);T.eq(w,1072);T.eq(h,1448)
+ end)
+ T.test('buffer dimensions are not accepted as a visible viewport',function()
+  T.eq(Paths.parse_fbink_state('viewWidth=1088;viewHeight=6144;BPP=8;'),nil)
+ end)
+ T.test('missing FBInk state refuses unsafe fallback',function()
+  T.eq(Paths.parse_fbink_state('1088,6144'),nil)
+ end)
+ T.test('runtime screen probe queries shipped FBInk',function()
+  local paths=Paths.new({app_dir='.'})
+  local w,h=paths:screen_size({run=function(_,argv) T.eq(argv[1],'runtime/fbink');T.eq(argv[2],'-e');return 0,state end},'runtime/fbink')
+  T.eq(w,1072);T.eq(h,1448)
+ end)
+end

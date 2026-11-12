@@ -1,0 +1,485 @@
+-- 滴答清单 Open API：视图、层级与用户点选完成。
+local json = require("core.json")
+local timeutil = require("core.timeutil")
+local util = require("core.util")
+
+local Dida = {}
+Dida.__index = Dida
+
+Dida.API_BASE = "https://api.dida365.com/open/v1"
+Dida.TOKEN_URL = "https://dida365.com/oauth/token"
+
+local function urlencode(s)
+    return tostring(s):gsub("[^%w%-%._~]", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end)
+end
+
+local function parse_json_body(body)
+    local ok, value = pcall(json.decode, body or "")
+    if not ok then return nil, "invalid json: " .. tostring(value) end
+    return value
+end
+
+local function is_array(value)
+    if type(value)~='table' or value==json.null then return false end
+    local mt=getmetatable(value)
+    if mt and mt.__json_object then return false end
+    for k in pairs(value) do if type(k)~='number' or k<1 or k>#value or k%1~=0 then return false end end
+    return true
+end
+local function valid_tasks(tasks)
+    if not is_array(tasks) or #tasks>2000 then return false end
+    local ids={}
+    for _,task in ipairs(tasks) do
+        if type(task)~='table' or type(task.id)~='string' or task.id=='' or ids[task.id] then return false end
+        ids[task.id]=true
+        for _,field in ipairs({'items','childIds','tags'}) do
+            if task[field]~=nil and task[field]~=json.null and not is_array(task[field]) then return false end
+        end
+        for _,item in ipairs(task.items or {}) do if type(item)~='table' or type(item.id)~='string' then return false end end
+        for _,id in ipairs(task.childIds or {}) do if type(id)~='string' then return false end end
+    end
+    return true
+end
+
+function Dida.valid_cached_view(view)
+    if type(view)~='table' or view==json.null then return false end
+    local stack={};local count=0;local seen={}
+    for _,name in ipairs({'today','overdue','upcoming','undated'}) do
+        if view[name]~=nil then
+            if not is_array(view[name]) then return false end
+            for _,task in ipairs(view[name]) do stack[#stack+1]={task,0} end
+        end
+    end
+    while #stack>0 do
+        local entry=table.remove(stack);local node,depth=entry[1],entry[2]
+        if type(node)~='table' or node==json.null or depth>24 or seen[node] then return false end
+        seen[node]=true;count=count+1;if count>2000 then return false end
+        if type(node.id)~='string' or type(node.title)~='string' then return false end
+        if node.children~=nil and not is_array(node.children) then return false end
+        if node.checklist~=nil and not is_array(node.checklist) then return false end
+        for _,child in ipairs(node.children or {}) do stack[#stack+1]={child,depth+1} end
+        for _,item in ipairs(node.checklist or {}) do if type(item)~='table' or type(item.title)~='string' then return false end end
+    end
+    return true
+end
+
+function Dida.new(opts)
+    local self = setmetatable({}, Dida)
+    self.http = opts.http
+    self.config = opts.config
+    self.secrets = opts.secrets
+    self.cache = opts.cache
+    self.log = opts.log
+    self.now = opts.now or os.time
+    self.offset = opts.offset or 480
+    return self
+end
+
+function Dida:enabled()
+    local c = self.config:module("dida")
+    return c.enabled ~= false
+end
+
+function Dida:auth_state()
+    local s = self.secrets
+    local token=s:secret("dida.access_token")
+    if type(token)~='string' or token=='' then return "missing" end
+    local exp = s:secret("dida.expires_at", 0)
+    if exp and exp > 0 and exp <= self.now() + 300 then return "expired" end
+    return "ok"
+end
+
+function Dida:save_token(payload)
+    if type(payload) ~= "table" or not payload.access_token then
+        return false, "token response missing access_token"
+    end
+    local expires_in = tonumber(payload.expires_in) or 3600
+    self.secrets:set_secret("dida.access_token", payload.access_token)
+    if payload.refresh_token then
+        self.secrets:set_secret("dida.refresh_token", payload.refresh_token)
+    end
+    self.secrets:set_secret("dida.expires_at", self.now() + expires_in - 60)
+    self.secrets:set_secret("dida.scope", payload.scope)
+    self.secrets:save_secrets()
+    return true
+end
+
+-- 优先使用 refresh_token 换取新 access_token。
+function Dida:refresh_token(cb)
+    local client_id = self.secrets:secret("dida.client_id")
+    local client_secret = self.secrets:secret("dida.client_secret")
+    local refresh = self.secrets:secret("dida.refresh_token")
+    if not client_id or not client_secret or not refresh then
+        cb(false, "missing client credentials or refresh token")
+        return
+    end
+    local body = table.concat({
+        "client_id=" .. urlencode(client_id),
+        "client_secret=" .. urlencode(client_secret),
+        "grant_type=refresh_token",
+        "refresh_token=" .. urlencode(refresh),
+    }, "&")
+    self.http:request({
+        url = Dida.TOKEN_URL,
+        method = "POST",
+        headers = {
+            ["Content-Type"] = "application/x-www-form-urlencoded",
+            ["Accept"] = "application/json",
+        },
+        body = body,
+        timeout = 30,
+        label = "dida token refresh",
+        sensitive_values = {client_secret,refresh},
+    }, function(res)
+        if not res.ok then
+            cb(false, "token refresh failed: " .. tostring(res.error))
+            return
+        end
+        local data, err = parse_json_body(res.body)
+        if not data then
+            cb(false, err)
+            return
+        end
+        if not self:save_token(data) then
+            cb(false, "invalid token payload")
+            return
+        end
+        cb(true)
+    end)
+end
+
+function Dida:_api_get(path, cb)
+    local token = self.secrets:secret("dida.access_token")
+    self.http:request({
+        url = Dida.API_BASE .. path,
+        method = "GET",
+        headers = {
+            ["Authorization"] = "Bearer " .. tostring(token),
+            ["Accept"] = "application/json",
+        },
+        timeout = 40,
+        label = "dida API",
+        sensitive_values = {token},
+    }, function(res)
+        if not res.ok then
+            cb(false, res.status == 401 and "unauthorized" or res.error, nil, res.status)
+            return
+        end
+        local data, err = parse_json_body(res.body)
+        if not data then cb(false, err) return end
+        cb(true, nil, data, res.status, #(res.body or ""))
+    end)
+end
+
+local function task_time_key(task, offset)
+    local raw=type(task.dueDate)=="string" and task.dueDate or task.startDate
+    if task.isAllDay == true or task.isAllDay == "true" then
+        local date = tostring(raw or ""):match("^(%d%d%d%d%-%d%d%-%d%d)")
+        if date then return date end
+    end
+    local ts = timeutil.parse_iso8601(raw)
+    if not ts then return nil end
+    return timeutil.date_key(ts, offset)
+end
+
+local function completed_key(task, offset)
+    local raw = task.completedTime
+    if type(raw) == "number" then
+        return timeutil.date_key(raw / 1000, offset)
+    end
+    if type(raw) == "string" then
+        local ts = timeutil.parse_iso8601(raw)
+        if ts then return timeutil.date_key(ts, offset) end
+    end
+    return nil
+end
+
+local PRIORITY = { [5] = "HIGH", [3] = "MED", [1] = "LOW", [0] = "NONE" }
+
+-- 纯函数：把 API 数据转换为 UI 视图（可单测）。
+function Dida.build_view(projects, project_data, now, offset, opts)
+    opts=opts or {};local today=timeutil.date_key(now,offset)
+    local names,map,raw={},{},{};local task_count=0
+    for _,p in ipairs(projects or {}) do names[p.id]=p.name end
+    for project_id,data in pairs(project_data or {}) do
+        for _,t in ipairs(data.tasks or {}) do
+            task_count=task_count+1;if task_count>2000 then error("task count exceeds device limit") end
+            local pid=t.projectId or project_id;local key=pid..":"..tostring(t.id)
+            raw[key]=t
+            map[key]={id=t.id,project_id=pid,project=names[pid] or (pid:match('^inbox') and '收集箱') or pid,title=t.title or t.content or "(untitled)",
+                priority=tonumber(t.priority) or 0,priority_label=PRIORITY[tonumber(t.priority) or 0],
+                due_key=task_time_key(t,offset),own_due_key=task_time_key(t,offset),date_metadata=true,source_due=t.dueDate,source_start=t.startDate,is_all_day=t.isAllDay,repeat_flag=t.repeatFlag,tags=t.tags or {},parent_id=type(t.parentId)=="string" and t.parentId~="" and t.parentId or nil,
+                completed=tonumber(t.status)==2,children={},checklist=util.deep_copy(t.items or {})}
+        end
+    end
+    local view={today={},overdue={},upcoming={},undated={},completed_today=0,today_completed=0,total_today=0,progress=0,projects=projects or {},synced_at=now}
+    local attached={}
+    for key,item in pairs(map) do
+        local parent=item.parent_id and map[item.project_id..":"..item.parent_id]
+        if parent and parent~=item and not parent.completed then
+            -- Reject cyclic parent chains instead of recursing forever.
+            local cur,seen=parent,{};local cycle=false;local depth=0
+            while cur do
+                depth=depth+1;if depth>24 then error("task hierarchy exceeds device limit") end
+                if cur==item or seen[cur] then cycle=true;break end
+                seen[cur]=true;cur=cur.parent_id and map[cur.project_id..":"..cur.parent_id]
+            end
+            if not cycle then parent.children[#parent.children+1]=item;attached[key]=true end
+        end
+    end
+    local function inherit(item,seen)
+        seen=seen or {};if seen[item] then return end;seen[item]=true
+        for _,child in ipairs(item.children) do
+            inherit(child,seen)
+            if not child.due_key then child.due_key=item.due_key end
+            if not child.completed and child.due_key and (not item.due_key or child.due_key<item.due_key) then item.due_key=child.due_key end
+        end
+    end
+    for key,item in pairs(map) do
+        if not attached[key] then
+            inherit(item)
+            if item.completed then
+                if completed_key(raw[key],offset)==today then
+                    view.completed_today=view.completed_today+1
+                    if item.own_due_key==today then view.today_completed=view.today_completed+1 end
+                end
+            else
+                local date=item.due_key
+                if not date then view.undated[#view.undated+1]=item
+                elseif date<today then view.overdue[#view.overdue+1]=item
+                elseif date==today then view.today[#view.today+1]=item
+                else
+                    local diff=timeutil.days_until_date(date,today)
+                    if diff and diff<=(opts.upcoming_days or 7) then item.days_left=diff;view.upcoming[#view.upcoming+1]=item end
+                end
+            end
+        end
+    end
+    local function cmp(a,b)
+        if a.completed~=b.completed then return not a.completed end
+        if a.priority~=b.priority then return a.priority>b.priority end
+        if a.due_key~=b.due_key then return (a.due_key or "9999")<(b.due_key or "9999") end
+        return a.title<b.title
+    end
+    local function sort_tree(list)
+        table.sort(list,cmp);for _,item in ipairs(list) do sort_tree(item.children) end
+    end
+    for _,bucket in ipairs({'today','overdue','upcoming','undated'}) do sort_tree(view[bucket]) end
+    view.total_today=#view.today+view.completed_today
+    if view.total_today>0 then view.progress=util.clamp(math.floor(view.completed_today*100/view.total_today+0.5),0,100) end
+    return view
+end
+
+-- User-triggered writes only. Never queue or automatically retry a completion.
+function Dida:complete(target,cb)
+    if self.config:module('dida').allow_complete==false then cb(false,'READ_ONLY');return end
+    if self.writing then cb(false,'BUSY');return end
+    if not target.project_id or not target.task_id then cb(false,'INVALID_TARGET');return end
+    self.writing=true
+    local function done(ok,err) self.writing=false;cb(ok,err) end
+    local pid,tid=urlencode(target.project_id),urlencode(target.task_id)
+    local function post(path,body,after)
+        local token=self.secrets:secret('dida.access_token')
+        self.http:request({url=Dida.API_BASE..path,method='POST',body=body and json.encode(body) or nil,
+            headers={Authorization='Bearer '..tostring(token),['Content-Type']='application/json',Accept='application/json'},
+            timeout=30,label='dida completion',sensitive_values={token}},function(res)
+            if not res.ok then
+                done(false,res.status==403 and 'WRITE_FORBIDDEN' or res.status==401 and 'AUTH_REQUIRED' or 'WRITE_UNCONFIRMED');return
+            end
+            if res.status~=200 and res.status~=201 and res.status~=204 then done(false,'WRITE_UNCONFIRMED');return end
+            if res.body and res.body~='' then
+                local payload=parse_json_body(res.body)
+                if type(payload)=='table' and ((type(payload.error)=='string' and payload.error~='') or (payload.errorCode and payload.errorCode~=0)) then done(false,'WRITE_UNCONFIRMED');return end
+            end
+            if after then after() else done(true) end
+        end)
+    end
+    local function start()
+        if target.item_id then
+            local path='/project/'..pid..'/task/'..tid
+            self:_api_get(path,function(ok,err,fresh)
+                if not ok or type(fresh)~='table' or fresh.id~=target.task_id or (type(fresh.projectId)=='string' and fresh.projectId~=target.project_id) then done(false,'READ_FAILED');return end
+                if tonumber(fresh.status)==2 then done(false,'TASK_ALREADY_COMPLETED');return end
+                local items=util.deep_copy(fresh.items or {});local picked
+                for _,item in ipairs(items) do if item.id==target.item_id then picked=item end end
+                if not picked then done(false,'ITEM_NOT_FOUND');return end
+                if tonumber(picked.status)==1 then done(true);return end
+                picked.status=1;picked.completedTime=os.date('!%Y-%m-%dT%H:%M:%S+0000',self.now())
+                local body={id=fresh.id,projectId=target.project_id,items=items}
+                if type(fresh.etag)=='string' then body.etag=fresh.etag end
+                post('/task/'..tid,body,function()
+                    self:_api_get(path,function(ok2,err2,check)
+                        if ok2 and type(check)=='table' then
+                            for _,item in ipairs(check.items or {}) do
+                                if item.id==target.item_id and tonumber(item.status)==1 then done(true);return end
+                            end
+                        end
+                        done(false,'WRITE_UNCONFIRMED')
+                    end)
+                end)
+            end)
+        else
+            self:_api_get('/project/'..pid..'/data',function(ok,err,data)
+                if not ok or type(data)~='table' or not valid_tasks(data.tasks) then done(false,'READ_FAILED');return end
+                local fresh
+                for _,task in ipairs(data.tasks or {}) do if task.id==target.task_id then fresh=task end end
+                if not fresh then done(false,'TASK_NOT_FOUND');return end
+                if tonumber(fresh.status)==2 then done(true);return end
+                if type(fresh.repeatFlag)=='string' and fresh.repeatFlag~='' and target.expected_due~=fresh.dueDate then done(false,'TASK_CHANGED');return end
+                -- Active-project responses can omit completed children. Resolve referenced IDs before deciding.
+                local fetched=0
+                local function check_children()
+                    local by_id,children={},{}
+                    for _,task in ipairs(data.tasks) do
+                        if type(task.projectId)=='string' and task.projectId~=target.project_id then done(false,'READ_FAILED');return end
+                        by_id[task.id]=task
+                        if type(task.parentId)=='string' then children[task.parentId]=children[task.parentId] or {};table.insert(children[task.parentId],task.id) end
+                    end
+                    local stack={{id=fresh.id,depth=0}};local visited={};local missing,parent;local open=false
+                    while #stack>0 do
+                        local entry=table.remove(stack);local node=by_id[entry.id]
+                        if entry.depth>24 or visited[entry.id] then done(false,'READ_FAILED');return end
+                        visited[entry.id]=true
+                        if node~=fresh and tonumber(node.status)~=2 then open=true end
+                        for _,item in ipairs(node.items or {}) do if tonumber(item.status)~=1 then open=true end end
+                        local next_ids={}
+                        for _,id in ipairs(children[node.id] or {}) do next_ids[id]=true end
+                        for _,id in ipairs(node.childIds or {}) do next_ids[id]=true end
+                        for id in pairs(next_ids) do
+                            if not by_id[id] then missing,parent=id,node.id;break end
+                            stack[#stack+1]={id=id,depth=entry.depth+1}
+                        end
+                        if missing then break end
+                    end
+                    if missing then
+                        fetched=fetched+1;if fetched>64 then done(false,'READ_FAILED');return end
+                        self:_api_get('/project/'..pid..'/task/'..urlencode(missing),function(ok3,err3,child)
+                            if not ok3 or type(child)~='table' or child.id~=missing then done(false,'READ_FAILED');return end
+                            child.parentId=parent;data.tasks[#data.tasks+1]=child;check_children()
+                        end)
+                        return
+                    end
+                    if open then done(false,'OPEN_CHILDREN');return end
+                    post('/project/'..pid..'/task/'..tid..'/complete',nil,function()
+                        self:_api_get('/project/'..pid..'/task/'..tid,function(ok4,err4,check)
+                            if ok4 and type(check)=='table' and check.id==target.task_id and tonumber(check.status)==2
+                                and (type(check.projectId)~='string' or check.projectId==target.project_id) then done(true)
+                            else done(false,'WRITE_UNCONFIRMED') end
+                        end)
+                    end)
+                end
+                check_children()
+            end)
+        end
+    end
+    local auth=self:auth_state()
+    if auth=='missing' then done(false,'AUTH_REQUIRED')
+    elseif auth=='expired' then self:refresh_token(function(ok) if ok then start() else done(false,'AUTH_REQUIRED') end end)
+    else start() end
+end
+
+-- Drop descriptions/attachments from the read-only display snapshot. Writes
+-- still fetch the complete current server task immediately before submission.
+local function display_data(data)
+ local out={tasks={}}
+ local fields={'id','projectId','title','dueDate','startDate','isAllDay','priority','status','completedTime','repeatFlag','tags','parentId','childIds','items'}
+ for _,task in ipairs(type(data.tasks)=='table' and data.tasks or {}) do
+  local slim={};for _,name in ipairs(fields) do slim[name]=task[name] end
+  slim.title=slim.title or task.content or '(untitled)'
+  out.tasks[#out.tasks+1]=slim
+ end
+ return out
+end
+
+-- 同步：刷新 token（如需）→ 项目列表 → 逐个项目取数据。
+function Dida:sync(cb)
+    local started=self.now();local finished=false;local callback=cb
+    cb=function(...) if finished then return end;finished=true;return callback(...) end
+    local cfg = self.config:module("dida")
+    local function start()
+        self:_api_get("/project", function(ok, err, projects, status)
+            if not ok then cb(false, err) return end
+            if not is_array(projects) then cb(false, "INVALID_PROJECT_LIST") return end
+            local project_ids={}
+            for _,p in ipairs(projects) do
+                if type(p)~='table' or type(p.id)~='string' or p.id=='' or project_ids[p.id] then cb(false,'INVALID_PROJECT_LIST');return end
+                project_ids[p.id]=true
+            end
+            -- /project omits the virtual inbox. Read its data explicitly while
+            -- retaining each task's concrete projectId for later completion.
+            local has_inbox=false
+            for _,p in ipairs(projects) do if tostring(p.id):match('^inbox') then has_inbox=true end end
+            if not has_inbox then projects[#projects+1]={id='inbox',name='收集箱',kind='TASK'} end
+            local selected = {}
+            local wanted = cfg.project_ids
+            local wanted_set = nil
+            if type(wanted) == "table" and #wanted > 0 then
+                wanted_set = {}
+                for _, id in ipairs(wanted) do wanted_set[id] = true end
+            end
+            for _, p in ipairs(projects) do
+                local is_task_project = (p.kind == nil or p.kind == "TASK")
+                local not_closed = p.closed ~= true
+                local picked = (wanted_set == nil) or wanted_set[p.id] == true
+                if p.id=='inbox' and wanted_set then
+                    for id in pairs(wanted_set) do if tostring(id):match('^inbox') then picked=true end end
+                end
+                if is_task_project and not_closed and picked then
+                    selected[#selected + 1] = p
+                end
+            end
+            if #selected > 25 then
+                cb(false,"TOO_MANY_PROJECTS_SELECT_UP_TO_25");return
+            end
+            if wanted_set and #selected==0 then cb(false,'SELECTED_PROJECTS_NOT_FOUND');return end
+            local datas = {};local data_bytes=0
+            local index = 1
+            local function next_project()
+                if self.now()-started>90 then cb(false,"SYNC_TIMEOUT");return end
+                if index > #selected then
+                    local built,view=pcall(Dida.build_view,projects,datas,self.now(),self.offset,cfg)
+                    if not built then cb(false,"TASK_DATA_LIMIT_OR_INVALID");return end
+                    local saved=self.cache:write("dida", {
+                        cache_version = 1,
+                        data = { view = view },
+                        fetched_at = self.now(),
+                    })
+                    if self.log then self.log:info('dida sync complete projects='..#selected..' today='..#view.today) end
+                    cb(true, saved==false and 'CACHE_WRITE_FAILED' or nil, view)
+                    return
+                end
+                local p = selected[index]
+                index = index + 1
+                self:_api_get("/project/" .. urlencode(p.id) .. "/data", function(ok2, err2, data, st, response_bytes)
+                    if not ok2 then
+                        cb(false, "project " .. tostring(p.name or p.id) .. ": " .. tostring(err2))
+                        return
+                    end
+                    data_bytes=data_bytes+(response_bytes or 0)
+                    if data_bytes>4*1024*1024 then cb(false,"SYNC_DATA_EXCEEDS_DEVICE_LIMIT");return end
+                    if type(data)~='table' or not valid_tasks(data.tasks) then cb(false,'INVALID_TASK_LIST_OR_LIMIT');return end
+                    datas[p.id] = display_data(data)
+                    next_project()
+                end)
+            end
+            next_project()
+        end)
+    end
+    local state = self:auth_state()
+    if state == "missing" then
+        cb(false, "AUTH_REQUIRED")
+        return
+    end
+    if state == "expired" then
+        self:refresh_token(function(ok, err)
+            if not ok then cb(false, "AUTH_REQUIRED: " .. tostring(err)) return end
+            start()
+        end)
+        return
+    end
+    start()
+end
+
+return Dida

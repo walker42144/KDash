@@ -3,6 +3,7 @@ package.path = "./?.lua;./?/init.lua;./tests/?.lua;" .. package.path
 
 local T = require("tests.lib")
 local files = {
+    "test_latency",
     "test_review",
     "test_candidate",
     "test_refresh",

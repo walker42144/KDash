@@ -106,7 +106,10 @@ function App:setup()
         events = self.events,
         layout = self.layout,
         now = function() return self.clock:now() end,
-        device_info=function() return self.device:info(self.clock:now()) end,
+        device_info=function()
+            if self.device.dashboard_info then return self.device:dashboard_info(self.clock:now()) end
+            return self.device:info(self.clock:now())
+        end,
         power_button_sleep=self.power_sleep_enabled,
         log = self.log,
     })
@@ -118,10 +121,10 @@ function App:setup()
         self.need_full = true
     end
     if self.power then
-        local info = self.device:info(self.clock:now())
         if self.power_sleep_enabled then
             if not self.power:keep_active() then self.log:warn("initial idle timer reset failed; will retry");self.power_failures=1 end
         else
+            local info = self.device:info(self.clock:now())
             self.power:apply(self.config.data.power.keep_awake or "plugged",info.battery and info.battery.charging)
         end
         self.last_power_check = self.clock:now()
@@ -259,7 +262,6 @@ function App:maybe_power(now)
     if not self.power or self.sleeping then return end
     if now - self.last_power_check < 60 then return end
     self.last_power_check = now
-    local info = self.device:info(now)
     if self.power_sleep_enabled then
         if not self.power:keep_active() then
             self.power_failures=(self.power_failures or 0)+1
@@ -268,6 +270,7 @@ function App:maybe_power(now)
             if self.power_failures>=3 then error("idle timer unavailable repeatedly") end
         else self.power_failures=0 end
     else
+        local info = self.device:info(now)
         self.power:apply(self.config.data.power.keep_awake or "plugged",info.battery and info.battery.charging)
     end
 end

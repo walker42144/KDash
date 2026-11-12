@@ -96,7 +96,7 @@ end
 -- Same powerd property used by the KOReader installed on this device.
 function Power:keep_active()
     if self.applied~=false and not self:set_hold(false) then return false end
-    local code=self.runner:run({"lipc-set-prop","-i","com.lab126.powerd","touchScreenSaverTimeout","1"})
+    local code=self.runner:run({"lipc-set-prop","-i","com.lab126.powerd","touchScreenSaverTimeout","1"},'idle timer reset',2)
     if code~=0 then return false end
     return true
 end

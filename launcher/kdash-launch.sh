@@ -78,7 +78,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'RC=143; exit 143' INT HUP TERM
-log "session_begin version=0.1.1-candidate1 revision=r16-review-fixes lock_wait_ticks=$attempt run=$RUN"
+log "session_begin version=0.1.1-candidate1 revision=r17-startup-wake lock_wait_ticks=$attempt run=$RUN"
 rotate_log "$DATA/logs/bootstrap.log"
 # Only completed, inactive, non-symlink sessions with an exact owned basename
 # are reclaimed. Failed recovery snapshots are deliberately retained.
@@ -95,14 +95,16 @@ cp "$PKG/runtime/libfreetype.so.6" "$RUN/libfreetype.so.6" && cp "$PKG/runtime/l
 chmod 755 "$RUN/luajit" "$RUN/fbink" "$RUN/libfreetype.so.6" "$RUN/libz.so.1" || exit 2
 export KDASH_FREETYPE="$RUN/libfreetype.so.6"
 export KDASH_ZLIB="$RUN/libz.so.1"
-"$RUN/luajit" -e 'os.exit(0)' >> "$LOG" 2>&1 || exit 2
-bounded "$RUN/fbink" -e >> "$LOG" 2>&1 || exit 2
+# The touch probe already starts LuaJIT; the display probe runs and validates FBInk.
 "$RUN/luajit" "$PKG/app/main.lua" --probe-touch >> "$LOG" 2>&1 || exit 2
+log 'preflight_touch_ok'
 firmware=$(cat /etc/prettyversion.txt 2>/dev/null)
 log "firmware=$firmware kernel=$(uname -sr)"
 case "$firmware" in 'Kindle 5.16.2.1.1 '*) ;; *) log 'unreviewed firmware; abort'; exit 2;; esac
 "$RUN/luajit" "$PKG/app/main.lua" --probe-display --fbink "$RUN/fbink" >> "$LOG" 2>&1 || exit 2
+log 'preflight_display_ok'
 "$RUN/luajit" "$PKG/app/main.lua" --probe-native-display >> "$LOG" 2>&1 || exit 2
+log 'preflight_native_ok'
 for p in $(pidof cvm); do
     [ "$(awk '{print $3}' /proc/$p/stat)" != T ] || { log 'cvm is paused by another app'; exit 3; }
 done

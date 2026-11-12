@@ -5,7 +5,8 @@ local M = {}
 local state = { info = nil }
 
 function M.init(ctx)
-    state.info = ctx.device_info()
+    state.info = nil
+    if ctx.config:module('device').enabled~=false then state.info=ctx.device_info() end
     return true
 end
 

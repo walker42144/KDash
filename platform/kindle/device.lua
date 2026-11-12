@@ -24,6 +24,7 @@ function Device.new(opts)
     self.cache = nil
     self.cache_at = 0
     self.cache_ttl = 20
+    self.run_dir=opts.run_dir or os.getenv('KDASH_POWER_RUN')
     return self
 end
 
@@ -141,6 +142,38 @@ function Device:frontlight()
     local code, out = self.runner:run({ "lipc-get-prop", "-i", "com.lab126.powerd", "flIntensity" })
     if code ~= 0 then return nil end
     return tonumber(util.trim(out))
+end
+
+-- The dashboard only needs battery. Never ask LIPC/df for unrelated device
+-- details on the input/render path, especially immediately after wake.
+function Device:dashboard_info(now)
+    now=now or os.time()
+    if self.dashboard_cache and now-self.dashboard_cache_at<self.cache_ttl then return self.dashboard_cache end
+    local battery=self:_battery_from_power_supply()
+    if not battery and self.run_dir and self.fs.read and self.fs.write then
+        local dir=self.run_dir..'/http';local result=dir..'/battery.result'
+        local raw=self.fs:read(result,128)
+        if raw then
+            local level,charging=raw:match('^(%d+)%s+(%d+)')
+            level=tonumber(level);charging=tonumber(charging)
+            if level and level<=100 and (charging==0 or charging==1) then battery={level=level,charging=charging==1,status='unknown',source='lipc-async'} end
+        end
+        if now>=(self.battery_retry_at or 0) and self.runner.spawn_script then
+            self.battery_retry_at=now+60
+            local q=util.shell_quote;local script=dir..'/battery-read.sh'
+            local helper=q(self.run_dir..'/command-timeout.sh');local out=q(result);local tmp=q(result..'.tmp')
+            local body='#!/bin/sh\nlevel=$(/bin/sh '..helper..' 2 lipc-get-prop -i com.lab126.powerd battLevel 2>/dev/null) || exit 1\n'
+                ..'case "$level" in ""|*[!0-9]*) exit 1;; esac\n'
+                ..'charging=$(/bin/sh '..helper..' 2 lipc-get-prop -i com.lab126.powerd isCharging 2>/dev/null) || charging=0\n'
+                ..'case "$charging" in 1) charging=1;; *) charging=0;; esac\n'
+                ..'printf "%s %s\\n" "$level" "$charging" > '..tmp..' && mv -f '..tmp..' '..out..'\n'
+            if self.fs:write(script,body) then self.runner:spawn_script(script,dir..'/battery.worker.pid') end
+        end
+    end
+    if battery and battery.level then battery.level=util.clamp(battery.level,0,100) end
+    battery=battery or (self.cache and self.cache.battery) or {level=nil,charging=false,status='unknown'}
+    self.dashboard_cache={battery=battery};self.dashboard_cache_at=now
+    return self.dashboard_cache
 end
 
 function Device:info(now)

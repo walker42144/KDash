@@ -28,6 +28,8 @@ function Cache:read(name)
         if self.log then self.log:warn("cache parse failed: " .. name .. ": " .. tostring(value)) end
         return nil
     end
+    if type(value)~='table' or value==json.null or (value.cache_version~=nil and value.cache_version~=1)
+        or type(value.data)~='table' or type(value.fetched_at)~='number' then return nil end
     return value
 end
 
@@ -43,6 +45,7 @@ function Cache:write(name, payload)
     local ok, encoded = pcall(json.encode, env, false)
     if not ok then return false, encoded end
     if #encoded>4*1024*1024 then return false,"cache exceeds size limit" end
+    if not pcall(json.decode,encoded) then return false,'cache exceeds JSON decoder limits' end
     local wrote, err = self.storage:write_atomic(self:path(name), encoded)
     if not wrote and self.log then
         self.log:warn("cache write failed: " .. name .. ": " .. tostring(err))

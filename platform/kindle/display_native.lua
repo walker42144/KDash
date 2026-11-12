@@ -1,16 +1,22 @@
 local ffi=require('ffi');ffi.cdef[[int memcmp(const void*,const void*,size_t);]];local D={};D.__index=D
 function D.new(o)
  local self=setmetatable({width=o.width or 1072,height=o.height or 1448,runner=o.runner,fbink=o.fbink,log=o.log,
-  available=true,partial_count=0,full_refresh_every=o.full_refresh_every or 24,out=o.out,fonts=o.fonts},D)
+  available=true,partial_count=0,full_refresh_every=o.full_refresh_every or 24,out=o.out,fonts=o.fonts,ink_mode=o.ink_mode},D)
  self.font=require('platform.kindle.freetype').new(o.fonts)
  self.canvas=require('ui.canvas').new(self.width,self.height,self.font)
- if o.device then self.fb=require('platform.kindle.framebuffer').new() end
+ if o.device then
+  local ok,err=pcall(function()
+   self.fb=require('platform.kindle.framebuffer').new()
+   assert(self.width==self.fb.geometry.width and self.height==self.fb.geometry.height,'canvas/framebuffer geometry mismatch')
+  end)
+  if not ok then self:close();error(err) end
+ end
  self.dirty={};return self
 end
 function D:measure(text,size) return self.font:measure(text,size) end
 function D:begin_frame(full)
  self.dirty={}
- if full then self.canvas:fill({x=0,y=0,w=self.width,h=self.height},'paper');self:add_dirty(0,0,self.width,self.height) end
+ if full then self.canvas:fill({x=0,y=0,w=self.width,h=self.height},self.ink_mode and 'ink' or 'paper');self:add_dirty(0,0,self.width,self.height) end
 end
 function D:add_dirty(x,y,w,h)
  x,y,w,h=math.floor(x),math.floor(y),math.ceil(w),math.ceil(h)
@@ -31,11 +37,22 @@ function D:circle(x,y,r,c,filled,w) self.canvas:circle(x,y,r,c,filled,w);self:ad
 function D:rounded_box(r,radius,color) self.canvas:rounded_box(r,radius,color);self:add_dirty(r.x,r.y,r.w,r.h) end
 function D:chevron(r,up,color) self.canvas:chevron(r,up,color);self:add_dirty(r.x,r.y,r.w,r.h) end
 function D:prepare_screensaver(dir)
- local f=assert(io.open(dir..'/screensaver/wallpaper.y8','rb'),'wallpaper.y8 missing')
- local raw=f:read('*a');f:close();assert(#raw==self.width*self.height,'invalid wallpaper dimensions');self.wallpaper=raw
+ local f=io.open(dir..'/screensaver/wallpaper.y8','rb')
+ if f then
+  local raw=f:read(self.width*self.height+1);f:close()
+  if raw and #raw==self.width*self.height then self.wallpaper=raw;return true end
+ end
+ self.wallpaper=nil
+ if self.log then self.log:warn('wallpaper missing or invalid; using text screensaver') end
+ return false
 end
 function D:show_screensaver()
- assert(self.wallpaper,'screensaver not preloaded');self.dashboard=self.canvas:string();self.canvas:load(self.wallpaper)
+ self.dashboard=self.canvas:string()
+ if self.wallpaper then self.canvas:load(self.wallpaper)
+ else
+  self.canvas:fill({x=0,y=0,w=self.width,h=self.height},'paper')
+  self.canvas:text({text='KDASH',x=0,y=math.floor(self.height*.45),w=self.width,size=48,align='center'})
+ end
  self.dirty={};self:add_dirty(0,0,self.width,self.height);return self:flush({full=true,flash=true,screensaver=true})
 end
 function D:restore_dashboard()
@@ -66,7 +83,13 @@ function D:flush(o)
   else argv[#argv+1]=string.format('--refresh=top=%d,left=%d,width=%d,height=%d',y,x,x1-x,y1-y) end
   if o.flash then argv[#argv+1]='-f' end
   local code=self.runner:run(argv,'native canvas refresh')
+  if code~=0 then
+   if self.log then self.log:warn('native refresh failed; one bounded full-refresh retry') end
+   local retry={self.fbink,'-q','-w','-s','-W','GC16','-f'}
+   code=self.runner:run(retry,'native refresh retry')
+  end
   if code~=0 then self.available=false;return false end
+  self.available=true
   self.last_pixels=self.last_pixels or ffi.new('unsigned char[?]',self.width*self.height)
   ffi.copy(self.last_pixels,self.canvas.buf,self.width*self.height)
  end

@@ -10,6 +10,7 @@ mkdir -p "$DATA/logs" "$BASE" || exit 2
 # Wait for an exiting session, or recover an orphan, in this same launch.
 # Never kill a healthy active dashboard or blindly delete its ownership lock.
 attempt=0
+echo "$(date '+%Y-%m-%d %H:%M:%S') launch_requested" >> "$LOG"
 while ! mkdir "$BASE/session.lock" 2>/dev/null; do
     previous=$(cat "$BASE/session.lock/run" 2>/dev/null)
     case "$previous" in "$BASE"/run.*)
@@ -22,6 +23,7 @@ while ! mkdir "$BASE/session.lock" 2>/dev/null; do
             RUN=$previous
             . "$PKG/launcher/session-common.sh"
             if alive "$RUN/recover.pid"; then exit 10; fi
+            [ ! -f "$RUN/recovery.failed" ] || exit 12
             if alive "$RUN/supervisor.pid"; then
                 owner=$p
                 [ -f "$RUN/stop.request" ] && exit 10
@@ -36,13 +38,14 @@ while ! mkdir "$BASE/session.lock" 2>/dev/null; do
                 # Recovery can finish just before its owner is terminated while
                 # releasing the lock. Only release this exact completed owner.
                 [ "$(cat "$BASE/session.lock/run" 2>/dev/null)" = "$RUN" ] || exit 10
-                rm -f "$BASE/session.lock/run"
-                rmdir "$BASE/session.lock" 2>/dev/null || exit 10
+                if command -v release_lock >/dev/null 2>&1;then release_lock || exit 10
+                else rm -f "$BASE/session.lock/run";rmdir "$BASE/session.lock" 2>/dev/null || exit 10;fi
             else
                 recover || exit 10
             fi
         )
         result=$?
+        if [ "$result" -eq 12 ];then echo 'Recovery requires attention; use KDash Candidate Recovery.' >> "$LOG";exit 3;fi
         if [ "$result" -eq 11 ]; then
             echo 'Dashboard already running or starting; duplicate launch ignored.' >> "$LOG"
             exit 3
@@ -60,6 +63,9 @@ echo "$RUN" > "$BASE/session.lock/run"
 cp "$PKG/launcher/session-common.sh" "$RUN/session-common.sh" || exit 2
 cp "$PKG/launcher/session-guard.sh" "$RUN/session-guard.sh" || exit 2
 cp "$PKG/launcher/power-control.sh" "$RUN/power-control.sh" || exit 2
+cp "$PKG/launcher/power-monitor.sh" "$RUN/power-monitor.sh" || exit 2
+cp "$PKG/launcher/command-timeout.sh" "$RUN/command-timeout.sh" || exit 2
+export KDASH_COMMAND_TIMEOUT="$RUN/command-timeout.sh"
 . "$RUN/session-common.sh"
 record_pid "$RUN/supervisor.pid" $$
 RC=1
@@ -72,7 +78,16 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'RC=143; exit 143' INT HUP TERM
-log "session_begin version=0.1.1-candidate1 revision=r15-smooth-badges-arrows run=$RUN"
+log "session_begin version=0.1.1-candidate1 revision=r16-review-fixes lock_wait_ticks=$attempt run=$RUN"
+rotate_log "$DATA/logs/bootstrap.log"
+# Only completed, inactive, non-symlink sessions with an exact owned basename
+# are reclaimed. Failed recovery snapshots are deliberately retained.
+for old in "$BASE"/run.*;do
+ [ "$old" != "$RUN" ] && [ ! -L "$old" ] && [ -f "$old/recovery.done" ] || continue
+ token=${old#"$BASE"/run.};case "$token" in ''|*[!a-zA-Z0-9]*) continue;;esac
+ if alive "$old/supervisor.pid" || alive "$old/guard.pid" || alive "$old/recover.pid";then continue;fi
+ rm -rf "$old"
+done
 # All compatibility checks happen before stopping the GUI.
 for cmd in setsid pidof lipc-get-prop lipc-set-prop lipc-wait-event awk; do command -v "$cmd" >/dev/null 2>&1 || { log "missing $cmd"; exit 2; }; done
 cp "$PKG/runtime/luajit" "$RUN/luajit" && cp "$PKG/runtime/fbink" "$RUN/fbink" || exit 2
@@ -81,7 +96,7 @@ chmod 755 "$RUN/luajit" "$RUN/fbink" "$RUN/libfreetype.so.6" "$RUN/libz.so.1" ||
 export KDASH_FREETYPE="$RUN/libfreetype.so.6"
 export KDASH_ZLIB="$RUN/libz.so.1"
 "$RUN/luajit" -e 'os.exit(0)' >> "$LOG" 2>&1 || exit 2
-"$RUN/fbink" -e >> "$LOG" 2>&1 || exit 2
+bounded "$RUN/fbink" -e >> "$LOG" 2>&1 || exit 2
 "$RUN/luajit" "$PKG/app/main.lua" --probe-touch >> "$LOG" 2>&1 || exit 2
 firmware=$(cat /etc/prettyversion.txt 2>/dev/null)
 log "firmware=$firmware kernel=$(uname -sr)"
@@ -102,13 +117,14 @@ for name in Xorg awesome blanket pillowd cvm KPPMainApp mesquite; do
         echo "$ui_pid $(pid_stamp "$ui_pid") $name" >> "$RUN/ui.pids"
     done
 done
-saved=$(lipc-get-prop -i com.lab126.powerd preventScreenSaver 2>/dev/null) || exit 2
+saved=$(bounded lipc-get-prop -i com.lab126.powerd preventScreenSaver 2>/dev/null) || exit 2
 case "$saved" in ''|*[!0-9]*) log 'invalid screensaver value'; exit 2;; esac
 echo "$saved" > "$RUN/screensaver.before"
 limit=$(cat "$PKG/session-limit" 2>/dev/null)
 case "$limit" in 0|180) ;; *) log 'session-limit must be 180 (trial) or 0 (accepted)'; exit 2;; esac
 echo "$limit" > "$RUN/limit"
 setsid /bin/sh "$RUN/session-guard.sh" "$RUN" </dev/null >> "$LOG" 2>&1 &
+record_pid "$RUN/guard.pid" $!
 i=0; while [ ! -f "$RUN/guard.ready" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i+1)); done
 [ -f "$RUN/guard.ready" ] || { log 'watchdog handshake failed'; exit 2; }
 [ ! -f "$RUN/stop.request" ] || exit 2
@@ -131,10 +147,10 @@ dd if=/dev/fb0 of="$RUN/stock.fb" bs=4096 count=1632 2>> "$LOG" || exit 4
 [ "$(wc -c < "$RUN/stock.fb")" -eq 6684672 ] || exit 4
 log 'ui_paused stock_frame_saved' 
 [ ! -f "$RUN/stop.request" ] || exit 2
-lipc-set-prop -i com.lab126.powerd preventScreenSaver 1 >> "$LOG" 2>&1 || exit 4
+bounded lipc-set-prop -i com.lab126.powerd preventScreenSaver 1 >> "$LOG" 2>&1 || exit 4
 # Subscribe before app start. Failure triggers the existing exact-PID recovery path.
 : > "$RUN/power.events"
-lipc-wait-event -m -s 0 com.lab126.powerd '*' > "$RUN/power.events" 2> "$RUN/power.stderr" &
+/bin/sh "$RUN/power-monitor.sh" "$RUN" &
 monitor=$!; record_pid "$RUN/power-monitor.pid" "$monitor"
 : > "$RUN/power-monitor.ready"
 sleep 1
@@ -150,6 +166,7 @@ export KDASH_FBINK="$RUN/fbink"
 log 'app_start'
 "$RUN/luajit" "$PKG/app/main.lua" --app-dir "$PKG/app" --data-dir "$DATA" >> "$LOG" 2>&1 &
 app=$!; record_pid "$RUN/app.pid" "$app"
+date +%s > "$RUN/heartbeat"
 wait "$app"; RC=$?
 log "app_exit rc=$RC"
 exit "$RC"

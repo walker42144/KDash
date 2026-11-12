@@ -253,7 +253,10 @@ local function parse_object(s, i, depth)
     end
 end
 
+local decode_nodes=0
 parse_value = function(s, i, depth)
+    decode_nodes=decode_nodes+1
+    if decode_nodes>50000 then error('JSON node count exceeds 50000') end
     depth=depth or 0
     if depth>64 then error("JSON nesting exceeds 64 levels") end
     i = skip_ws(s, i)
@@ -301,6 +304,7 @@ end
 
 function json.decode(s)
     if type(s) ~= "string" then error("json.decode expects string") end
+    decode_nodes=0
     local value, i = parse_value(s, 1)
     i = skip_ws(s, i)
     if i <= #s then error("trailing data at " .. i) end

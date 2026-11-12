@@ -67,7 +67,7 @@ function Weather.build_url(cfg)
         "%s?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code,relative_humidity_2m,apparent_temperature"
         .. "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
         .. "&timezone=%s&forecast_days=%d",
-        Weather.BASE, lat, lon, tz:gsub("/", "%%2F"), days
+        Weather.BASE, lat, lon, (tz:gsub("[^%w%-%._~]",function(c) return string.format("%%%02X",c:byte()) end)), days
     )
 end
 

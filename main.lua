@@ -48,7 +48,7 @@ local App = require("core.app")
 
 local function fatal(msg, display)
     io.stderr:write("KDASH FATAL: " .. tostring(msg) .. "\n")
-    if display then
+    if display and display.available~=false then
         pcall(function()
             display:begin_frame(true)
             display:fill({ x = 80, y = 200, w = display.width - 160, h = 500 }, "paper")
@@ -68,6 +68,7 @@ local function fatal(msg, display)
             display:flush({ full = true })
         end)
     end
+    return 1
 end
 
 local function native_fonts()
@@ -99,6 +100,9 @@ local function main()
     local data_dir = args.data_dir or "/mnt/us/kdash"
     local storage = Storage.new()
     local is_preview = args.preview == true
+    if not is_preview and storage:exists(data_dir..'/.kdash-save.pending') then
+        return fatal('configuration save was interrupted; reconnect USB and reopen the PC configuration tool to recover')
+    end
     local log
     if is_preview then
         log = Log.new({ echo = true, level = "warn" })
@@ -217,10 +221,10 @@ local function main()
         margin = config.data.ui.margin or 56,
         ink_mode = config.data.ui.ink_mode == true,
     })
-    display:prepare_screensaver(data_dir)
     if not display then
         return fatal("display backend initialization failed (Display.new returned nil).")
     end
+    display:prepare_screensaver(data_dir)
 
     local ic = config.data.input or {}
     local touch = Touch.new({ path = ic.device, width = display.width, height = display.height,
@@ -274,7 +278,7 @@ local function main()
         return 1
     end
     if display.close then display:close() end
-    return 0
+    return tonumber(err) or 0
 end
 
 local ok, rc = xpcall(main, function(e)

@@ -8,7 +8,7 @@ Config.__index = Config
 Config.SCHEMA_VERSION = 1
 
 local function read_json(storage, path)
-    local data, err = storage:read(path)
+    local data, err = storage:read(path,1024*1024)
     if not data then return nil, err end
     local ok, value = pcall(json.decode, data)
     if not ok then return nil, "invalid json: " .. tostring(value) end
@@ -75,6 +75,8 @@ function Config:validate()
     cfg.power.keep_awake = cfg.power.keep_awake or "plugged"
     cfg.power.full_refresh_every = math.floor(util.clamp(tonumber(cfg.power.full_refresh_every) or 24, 0, 1000))
     cfg.modules = cfg.modules or {}
+    -- Seconds cannot be truthful on a minute-based e-ink refresh grid.
+    if cfg.modules.clock then cfg.modules.clock.show_seconds=false end
     cfg.pages = cfg.pages or {}
     if #cfg.pages == 0 then
         cfg.pages = {
@@ -96,6 +98,10 @@ function Config.load(opts)
     end
     self:migrate()
     self:validate()
+    if user then
+        local ok,serialized=pcall(json.encode,user,true)
+        if ok then self.saved_data=serialized end
+    end
     if not user then self.dirty = true end
     return self
 end
@@ -127,8 +133,9 @@ end
 function Config:save()
     local ok, data = pcall(json.encode, self.data, true)
     if not ok then return false, data end
+    if self.saved_data==data then self.dirty=false;return true end
     local wrote, err = self.storage:write_atomic(self.path, data)
-    if wrote then self.dirty = false end
+    if wrote then self.dirty = false;self.saved_data=data end
     return wrote, err
 end
 

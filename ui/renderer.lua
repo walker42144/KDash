@@ -18,6 +18,7 @@ function Renderer.new(opts)
     self.layout = opts.layout
     self.log = opts.log
     self.device_info=opts.device_info
+    self.power_button_sleep=opts.power_button_sleep
     self.now = opts.now or os.time
     self.rects = {}
     self.page = nil
@@ -132,7 +133,7 @@ function Renderer:render_footer(page)
         if level then ui:fill({x=bx+4,y=by+7,w=math.floor(44*math.max(0,math.min(100,level))/100),h=18},t.colors.ink) end
         ui:text({text=(level and (tostring(math.floor(level)).."%") or "--%")..(battery.charging and " +" or ""),
             x=bx+68,y=by,w=100,size=t.type.micro,color=t.colors.ink})
-        if self.config.data.ui.power_button_sleep then
+        if self.power_button_sleep or self.config.data.ui.power_button_sleep then
             local box={x=t.margin,y=y+t.space.sm,w=72,h=56}
             ui:box(box,false,t.colors.ink)
             local cx,cy=box.x+box.w/2,box.y+box.h/2
@@ -184,6 +185,7 @@ function Renderer:render_footer(page)
             ui:hline(ux, y + t.space.md + ui.typo:line_height(t.nav_size) - 4, label_w, t.colors.ink)
         end
         self.events:add_hit({
+            module_id = "__footer",
             x = x, y = y, w = item_w, h = t.footer_h,
             action = "page", payload = p.id, label = "nav:" .. p.id,
         })
@@ -274,11 +276,11 @@ function Renderer:render_dirty(ids, page)
     for _, id in ipairs(ids or {}) do
         if id == "clock" then
             self.events:remove_module_hits("__header")
-            self.display:fill({x=0,y=0,w=self.display.width,h=self.theme.margin+self.theme.header_h},"paper")
+            self.display:fill({x=0,y=0,w=self.display.width,h=self.theme.margin+self.theme.header_h},self.theme.colors.paper)
             self:render_header(page)
             self.events:remove_module_hits("__footer")
             local fy=self.display.height-self.theme.margin-self.theme.footer_h
-            self.display:fill({x=0,y=fy,w=self.display.width,h=self.display.height-fy},"paper")
+            self.display:fill({x=0,y=fy,w=self.display.width,h=self.display.height-fy},self.theme.colors.paper)
             self:render_footer(page)
         end
         local rect = self.rects[id]

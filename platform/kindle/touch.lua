@@ -104,12 +104,12 @@ end
 function Touch:poll(timeout)
  if not self.fd then return {} end
  local ffi=self.ffi; local p=ffi.new('struct kdash_pollfd[1]'); p[0].fd=self.fd; p[0].events=1
- local n=ffi.C.poll(p,1,timeout or 0); if n<0 then error('touch poll failed') end; if n==0 then return {} end
+ local n=ffi.C.poll(p,1,timeout or 0); if n<0 then if ffi.errno()==4 then return {} end;error('touch poll failed') end; if n==0 or tonumber(p[0].revents)==0 then return {} end
  if tonumber(p[0].revents)~=1 then error('touch disconnected') end
  local b=ffi.new('unsigned char[16]'); local records={}
  for _=1,512 do
-  local got=tonumber(ffi.C.read(self.fd,b,16)); if got<0 and ffi.errno()==11 then break end
-  if got~=16 then error('touch short read/disconnected') end
+  local got=tonumber(ffi.C.read(self.fd,b,16)); if got<0 and (ffi.errno()==11 or ffi.errno()==4) then break end
+  if got~=16 then self.state={};self.raw={slot=0};self.pending={};error('touch short read/disconnected') end
   records[#records+1]=assert(Touch.decode_event(ffi.string(b,16)))
  end
  return self:feed(records)

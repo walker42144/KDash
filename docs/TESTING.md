@@ -1,125 +1,23 @@
-> 历史参考：此文档来自 Trae v0.1，不能作为候选版安装／验证状态说明。当前步骤见项目根目录 README.md。
+# r16 主机验证与实机边界
 
-# 测试说明
+从源码根目录运行（LuaJIT、Python 3、Git Bash/sh、curl 在 PATH）：
 
-## 1. 主机侧测试
-
-### 单元测试
-
-```sh
-luajit tests/run.lua
+```powershell
+python tests/run_host.py --freetype '你的主机 FreeType 动态库绝对路径' --soak-frames 1000
 ```
 
-当前结果（2026-11-11，Windows + LuaJIT 2.1）：
+不提供 --freetype 会明确 SKIP 原生绘制及压力测试，不应记为原生通过。Windows DLL 与 Kindle ARM .so 不能互换。例：本机已准备的主机 DLL 为工作区 `work/toolchains/freetype/freetype/libfreetype.dll`；这不是源码包自带的通用主机依赖。
 
-```text
-39 passed, 0 failed
-```
+入口包含 Lua 回归、PC 模型、启动锁/恢复/电源 Shell 模拟、新故障回归、真实本机 curl HTTP 假服务、可选真实 FreeType + native canvas。后者只替换最终 framebuffer sink 与 FBInk runner，不操作 /dev/fb0；检查 GC16、真实 diff 包围盒、重试、壁纸/文字兜底、内存拷贝哨兵。旧 display_fbink 的测试仍保留，但不是生产显示验证。
 
-覆盖：
+`tests/soak_native.lua` 放入源码，1000 次局部重绘用自然 GC、固定多页非极简页脚，检查 hit 数量；再加载4000个字形。它不是连续运行1000分钟，也不证明真实 RAM、文件描述符、僵尸进程或电量。可另用系统工具观测 RSS，主机结果不能折算为 KPW3 占用。
 
-- JSON 编解码：Unicode、代理对、null、空数组/对象、错误输入
-- 时间：civil date、ISO8601 偏移、日期型倒计时、时刻型倒计时、过期、星期/日期标签
-- 调度器：到期、分钟对齐、合并、失败退避、强制与移除
-- 配置：默认值深合并、用户覆盖、数组替换、持久化、secrets 独立
-- 布局：权重、最小高度、双列、禁用模块过滤
-- Dida 视图：今日/逾期/即将到期、完成数、进度、优先级排序
-- 天气：Open-Meteo payload 解析、URL、错误 payload
-- 触摸：16 字节 evdev 解码、单点/协议 B、tap/swipe
-- 注册表：新增模块无需改核心、初始化、未知 API 隔离
-- HTTP：脚本 shebang/续行/完成标记、成功回调、HTTP 错误状态
-- 显示后端：`Display.new` 返回实例、FBInk OTF 参数、失败降级
-- 启动集成：用真实 `App` + FBInk 后端 + 假 runner 完成 setup 与首屏渲染（覆盖 `display` 依赖注入）
+Shell 模拟使用假 PID/进程状态与压缩等待；不能据此判断实机恢复等待耗时、powerd 属性语义或 BusyBox 的进程组行为。command-timeout 的 Windows Shell 实测为单 PID 模式，设备使用 setsid 进程组，需要实机复测。
 
-### 页面 smoke test
+可选壁纸生成回归需 Pillow、fontTools：`python tests/test_wallpaper.py`。所有 launcher 脚本应在交付前运行 sh -n，USB 包必须是 LF 无 BOM。
 
-```sh
-python scripts/smoke_test.py
-```
+打包：`python scripts/build_package.py`。其缺失资源测试应在临时源码副本中进行，不能移走用户原文件。源码包附带的是既有 ARM ELF；本轮没有 Go 编译，也没有重新编译 LuaJIT/FBInk/FreeType。
 
-结果：
+Windows EXE 构建：`python pc_tool/build_windows.py`（需要 PyInstaller）。可运行 `KDash-Config-r16.exe --self-test-report 电脑上的结果路径.json`：只创建临时假配置、隐藏 widgets、检查资源与加密备份，不扫描 USB、不访问个人服务。
 
-```text
-home: 24 text elements, max_y=1346.4
-tasks: 21 text elements, max_y=1346.4
-system: 45 text elements, max_y=1346.4
-settings: 29 text elements, max_y=1346.4
-PASS: all pages rendered
-```
-
-检查：SVG 可生成、页脚四个导航项存在、没有 `nil`/`MODULE ERROR`/`KDASH FATAL`、文本基线不越过 1400px。
-
-### 包构建检查
-
-```sh
-python scripts/build_package.py
-```
-
-它验证包内必需文件：
-
-```text
-manifest.json
-install.sh / launch.sh / uninstall.sh
-launcher/kdash-launch.sh
-runtime/luajit / runtime/fbink
-app/main.lua
-app/config/default.json
-app/assets/fonts/DroidSansFallbackFull.ttf
-```
-
-输出 SHA-256 与文件数。
-
-## 2. 测试的边界
-
-这些测试**不能**证明：
-
-- FBInk 在 KPW3 上的实际输出、字体渲染、刷新波形
-- KPM/scriptlet 在该固件上的安装与启动
-- `/dev/input/event1` 的坐标方向
-- `curl` 的 TLS/CA 能力
-- 框架停止/恢复时序
-- 休眠/唤醒行为
-- KPM 升级路径
-
-因此文档只写“主机侧通过”，不写“实机通过”。
-
-## 3. 添加测试
-
-在 `tests/` 新建 `test_<name>.lua`：
-
-```lua
-return function(T)
-    T.test("my module parses data", function()
-        local M = require("services.api.myapi")
-        local view = M.parse(fixture)
-        T.eq(view.value, 42)
-    end)
-end
-```
-
-把文件名加入 `tests/run.lua` 的 `files` 列表。
-
-要求：
-
-- 数据处理与 UI/网络解耦，才能单测。
-- 网络适配器用 fixture JSON；不要测试真实网络。
-- 模块注册路径用临时目录（参考 `tests/test_registry.lua`）。
-
-## 4. 实机验收清单
-
-见 `docs/DEVICE_DIAGNOSTICS.md` 第 4 节。至少需要：
-
-1. 诊断报告
-2. 启动/退出视频或照片
-3. 日志
-4. 触摸坐标验证
-5. KOReader 仍可启动
-6. 升级/卸载验证
-7. 休眠/唤醒记录
-
-## 5. 已知未跑的命令
-
-- 没有在 ARM 设备上运行 `luajit`/`fbink`。
-- 没有运行 KPM 安装。
-- 没有运行 OAuth 真实授权（工具是标准 OAuth2 流程，但未用真实 client 验证）。
-- 没有运行真实 Open-Meteo/Dida 请求（解析用 fixture）。
+本轮实跑数量与最后产物哈希见交付目录 `review-evidence/r16-validation.json`、`r16-host-validation.txt`。实机电源/退出恢复验收尚未进行。

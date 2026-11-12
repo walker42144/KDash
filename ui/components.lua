@@ -18,14 +18,11 @@ end
 function UI:text(opts)
     local size = opts.size or self.theme.type.body
     local text = tostring(opts.text or "")
-    local measured = self.typo:measure(text, size)
     local w = opts.w or (self.display.width - (opts.x or 0) - self.theme.margin)
+    text=self.typo:fit(text,math.max(0,w),size)
+    local measured = self.typo:measure(text, size)
     local x = opts.x or self.theme.margin
     local align = opts.align or "left"
-    if align == "right" then
-        x = x + w - measured
-        align = "left"
-    end
     if align == "center" then
         x = opts.x or self.theme.margin
     end

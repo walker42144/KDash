@@ -27,6 +27,7 @@ function App.new(opts)
     self.power = opts.power
     self.http = opts.http
     self.clock = opts.clock
+    self.run_dir=opts.run_dir or os.getenv('KDASH_POWER_RUN')
     self.dirty = {}
     self.manual_refresh = {}
     self.async_started = {}
@@ -39,8 +40,8 @@ end
 
 function App:setup()
     self.power_sleep_enabled=self.power and self.power.events_path~=nil
-    self.updates_paused=not self.power_sleep_enabled and self.config.data.ui.auto_update==false
-    if self.power_sleep_enabled then self.config.data.ui.power_button_sleep=true;self.config.data.ui.auto_update=true end
+    self.updates_paused=self.config.data.ui.auto_update==false
+    -- Physical sleep is a runtime capability, never a persisted user setting.
     self.refresh_anchor,self.calibration_at=require("core.refresh_policy").initial(self.config.data,self.clock:now())
     self.next_screen_at=require("core.refresh_policy").next_slot(self.config.data,self.refresh_anchor,self.refresh_anchor)
     require("ui.dashboard").apply(self.config.data)
@@ -52,7 +53,7 @@ function App:setup()
         margin = self.config.data.ui.margin or 56,
     })
     self.typo = Typo.new({measure=self.display.measure and function(text,size) return self.display:measure(text,size) end})
-    self.events = Events.new()
+    self.events = Events.new(self.display.width,self.display.height)
     self.cache = Cache.new({
         dir = self.data_dir .. "/cache",
         storage = self.storage,
@@ -106,6 +107,7 @@ function App:setup()
         layout = self.layout,
         now = function() return self.clock:now() end,
         device_info=function() return self.device:info(self.clock:now()) end,
+        power_button_sleep=self.power_sleep_enabled,
         log = self.log,
     })
 
@@ -118,7 +120,7 @@ function App:setup()
     if self.power then
         local info = self.device:info(self.clock:now())
         if self.power_sleep_enabled then
-            if not self.power:keep_active() then error("cannot reset idle timer") end
+            if not self.power:keep_active() then self.log:warn("initial idle timer reset failed; will retry");self.power_failures=1 end
         else
             self.power:apply(self.config.data.power.keep_awake or "plugged",info.battery and info.battery.charging)
         end
@@ -233,8 +235,9 @@ function App:run_refresh(id, now)
 end
 
 function App:refresh_due(now)
-    if self.pending_confirm or self.updates_paused or self.sleeping then return end
-    local ids = self.scheduler:tick(now)
+    if self.pending_confirm or self.sleeping then return end
+    if self.updates_paused and next(self.manual_refresh)==nil then return end
+    local ids = self.scheduler:tick(now,self.updates_paused and self.manual_refresh or nil)
     for _, id in ipairs(ids) do
         errors.guard(self.log, "refresh:" .. id, function() self:run_refresh(id, now) end)
     end
@@ -258,7 +261,12 @@ function App:maybe_power(now)
     self.last_power_check = now
     local info = self.device:info(now)
     if self.power_sleep_enabled then
-        if not self.power:keep_active() then error("cannot reset idle timer") end
+        if not self.power:keep_active() then
+            self.power_failures=(self.power_failures or 0)+1
+            self.last_power_check=now-55
+            self.log:warn("idle timer reset failed ("..self.power_failures.."/3)")
+            if self.power_failures>=3 then error("idle timer unavailable repeatedly") end
+        else self.power_failures=0 end
     else
         self.power:apply(self.config.data.power.keep_awake or "plugged",info.battery and info.battery.charging)
     end
@@ -461,8 +469,10 @@ function App:handle_power_event(event)
         if not self.power:set_hold(false) then error("cannot release hold on wake") end
         self.sleeping=false
         self.last_power_check=self.clock:now()
-        self.updates_paused=false
-        if self.display and self.display.restore_dashboard then self.display:restore_dashboard() end
+        self.updates_paused=self.config.data.ui.auto_update==false
+        -- Redraw the current model once. Restoring the saved canvas here would
+        -- trigger a redundant full refresh before render_full below.
+        if self.display then self.display.dashboard=nil end
         self.need_full=true
         self.next_screen_at=require("core.refresh_policy").next_slot(self.config.data,self.refresh_anchor,self.clock:now())
         self.scheduler:force_all(self.clock:now())
@@ -483,12 +493,12 @@ function App:run()
     if not self.display.available then error("initial display failed") end
     self.log:info("entering main loop")
     while not self.stop do
-        local evs = self.input:poll(200)
+        local evs=self:poll_safely("touch",function() return self.input:poll(200) end)
         if not self.input.fd then
             self.clock:sleep_ms(200)
         end
         if self.power_sleep_enabled then
-            for _,event in ipairs(self.power:poll_events()) do self:handle_power_event(event) end
+            for _,event in ipairs(self:poll_safely("power",function() return self.power:poll_events() end)) do self:handle_power_event(event) end
         end
         self:handle_input(evs)
         if self.stop then break end
@@ -503,6 +513,10 @@ function App:run()
         self:check_manual_batch(now)
         self:check_async(now)
         self:maybe_power(now)
+        if self.run_dir and (not self.last_heartbeat or now-self.last_heartbeat>=5) then
+            self.storage:write_atomic(self.run_dir..'/heartbeat',tostring(now)..'\n')
+            self.last_heartbeat=now
+        end
         if self.sleeping then
             -- Keep the screensaver intact, including when an in-flight write completes.
         elseif self.pending_confirm then
@@ -515,6 +529,7 @@ function App:run()
             self.dirty = {}
             if not self.display.available then
                 self.log:error("display became unavailable; stopping")
+                self.exit_code=1
                 self.stop = true
             end
         else
@@ -522,7 +537,7 @@ function App:run()
         end
     end
     self:cleanup()
-    return 0
+    return self.exit_code or 0
 end
 
 function App:cleanup()
@@ -533,6 +548,19 @@ function App:cleanup()
     if self.input then self.input:close() end
     self.config.data.ui.refreshing=nil
     self.config:save()
+    if self.log and self.log.close then self.log:close() end
+end
+
+-- Ignore an isolated interrupted read; a lost input device must eventually exit
+-- through the launcher recovery path rather than leave an unresponsive screen.
+function App:poll_safely(name,fn)
+    self.poll_failures=self.poll_failures or {}
+    local ok,result=pcall(fn)
+    if ok then self.poll_failures[name]=0;return result or {} end
+    local n=(self.poll_failures[name] or 0)+1;self.poll_failures[name]=n
+    if n==1 then self.log:warn(name.." read interrupted; retrying") end
+    if n>=3 then error(name.." unavailable repeatedly") end
+    return {}
 end
 
 return App

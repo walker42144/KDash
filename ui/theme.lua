@@ -21,7 +21,7 @@ function Theme.new(opts)
         paper = self.ink_mode and "ink" or "paper",
         ink = self.ink_mode and "paper" or "ink",
         muted = self.ink_mode and "paper" or "ink",
-        faint = self.ink_mode and "gray8" or "gray2",
+        faint = self.ink_mode and "gray5" or "gray2",
         rule = self.ink_mode and "paper" or "ink",
         inverse_bg = self.ink_mode and "paper" or "ink",
         inverse_fg = self.ink_mode and "ink" or "paper",

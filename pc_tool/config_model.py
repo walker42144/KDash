@@ -3,6 +3,8 @@ from pathlib import Path
 import math
 import copy,datetime as dt,hashlib,json,os,re,secrets,shutil,time,urllib.request,urllib.parse,urllib.error
 import http.server,threading,webbrowser
+import bundle_store
+import backup_store
 VERSION='0.1.1-candidate1'
 DIDA_AUTH='https://dida365.com/oauth/authorize'
 DIDA_TOKEN='https://dida365.com/oauth/token'
@@ -11,10 +13,17 @@ def digest(path):
  p=Path(path);return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
 def load(path):
  p=Path(path)
+ if (p.parent/'.kdash-save.pending').exists():raise ValueError('上次保存未完成，请点击“恢复未完成保存”后重新读取')
  if not p.exists():return {},None
- value=json.loads(p.read_text('utf-8-sig'))
+ if p.stat().st_size>4*1024*1024:raise ValueError('配置文件过大')
+ raw=p.read_bytes();value=json.loads(raw.decode('utf-8-sig'));snapshot=hashlib.sha256(raw).hexdigest()
+ if (p.parent/'.kdash-save.pending').exists():raise ValueError('配置正在保存，请稍后重新读取')
  if not isinstance(value,dict):raise ValueError('配置根节点必须是 JSON 对象')
- return value,digest(p)
+ return value,snapshot
+
+def recover_bundle(config_path):
+ path=Path(config_path)
+ with bundle_store.locked(path.parent):bundle_store.recover(path.parent)
 def validate_date(value):
  if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value):raise ValueError('目标日期格式应为 YYYY-MM-DD')
  return dt.date.fromisoformat(value)
@@ -74,6 +83,7 @@ def apply_config(original,values):
   if not -limit<=value<=limit:raise ValueError('经纬度超出范围')
   w[field]=value
  w['timezone']=values.get('timezone','Asia/Shanghai').strip() or 'Asia/Shanghai'
+ if len(w['timezone'])>100 or not re.fullmatch(r'[A-Za-z0-9_+\-/]+',w['timezone']):raise ValueError('天气时区格式错误，例如 Asia/Shanghai')
  w['solar_location']={'latitude':w['latitude'],'longitude':w['longitude']}
  ids=[s.strip() for s in values.get('project_ids','').replace('，',',').split(',') if s.strip()]
  modules['dida']['project_ids']=ids
@@ -102,6 +112,14 @@ def apply_secrets(original,values):
  elif values.get('expires_at') is not None:s['dida']['expires_at']=values['expires_at']
  return s
 def save_bundle(config_path,config,private,expected_config,expected_secrets,backup_root):
+ path=Path(config_path)
+ if not path.parent.is_dir():raise ValueError('目标目录不存在；请先部署候选版')
+ if path.name=='secrets.json':raise ValueError('配置文件不能命名为 secrets.json')
+ with bundle_store.locked(path.parent):
+  bundle_store.recover(path.parent)
+  return _save_bundle(path,config,private,expected_config,expected_secrets,backup_root)
+
+def _save_bundle(config_path,config,private,expected_config,expected_secrets,backup_root):
  """Validate both snapshots, back up first, then replace; restore originals on partial failure."""
  path=Path(config_path); secret_path=path.with_name('secrets.json')
  if path.is_symlink() or secret_path.is_symlink():raise ValueError('不覆盖符号链接配置')
@@ -110,22 +128,31 @@ def save_bundle(config_path,config,private,expected_config,expected_secrets,back
  backup=Path(backup_root)/(dt.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+secrets.token_hex(3));backup.mkdir(parents=True)
  originals={p:p.read_bytes() if p.exists() else None for p in [path,secret_path]}
  for p,b in originals.items():
-  if b is not None:(backup/p.name).write_bytes(b)
+  if b is not None:backup_store.write(backup,p.name,b)
+ (backup/'backup-info.json').write_text(json.dumps({'version':1,'config_name':path.name,'credentials':'DPAPI current user' if os.name=='nt' else '0600 local file'}),'utf-8')
+ backup_store.prune(backup_root)
  payloads={path:json.dumps(config,ensure_ascii=False,indent=2)+'\n',secret_path:json.dumps(private,ensure_ascii=False,indent=2)+'\n'}
- temps=[]
+ # A journal remains if a disconnect prevents rollback. Never truncate targets.
+ journal_started=False
  try:
-  for p,text in payloads.items():
-   tmp=p.with_name(p.name+'.kdash-'+secrets.token_hex(4)+'.tmp');tmp.write_bytes(text.encode('utf-8'));temps.append((p,tmp))
-  for p,tmp in temps:os.replace(tmp,p)
+  bundle_store.begin(path.parent,originals);journal_started=True
+  for p,text in payloads.items():bundle_store.atomic_bytes(p,text.encode('utf-8'))
   for p in payloads:json.loads(p.read_text('utf-8'))
+  bundle_store.commit(path.parent);journal_started=False
  except Exception:
-  for p,b in originals.items():
-   if b is None:p.unlink(missing_ok=True)
-   else:p.write_bytes(b)
+  if journal_started:
+   try:bundle_store.recover(path.parent)
+   except (OSError,ValueError):pass # durable journal enables recovery after reconnect
   raise
- finally:
-  for _,tmp in temps:tmp.unlink(missing_ok=True)
  return backup,digest(path),digest(secret_path)
+
+def read_backup(folder):
+ folder=Path(folder);info=json.loads((folder/'backup-info.json').read_text('utf-8'))
+ name=info['config_name']
+ if Path(name).name!=name:raise ValueError('备份配置路径不正确')
+ c=json.loads((folder/name).read_text('utf-8'));s=json.loads(backup_store.read_secrets(folder))
+ if not isinstance(c,dict) or not isinstance(s,dict):raise ValueError('备份格式不正确')
+ return c,s
 def detect_kindles():
  found=[]
  for letter in 'DEFGHIJKLMNOPQRSTUVWXYZ':

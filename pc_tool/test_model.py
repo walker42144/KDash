@@ -64,7 +64,8 @@ class ConfigTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    p=Path(tmp)/'config.json';p.write_text(json.dumps(DEFAULT));s=p.with_name('secrets.json');s.write_text('{"keep":true}')
    backup,ch,sh=m.save_bundle(p,m.apply_config(DEFAULT,values()),{'amap':{'key':'fake'}},m.digest(p),m.digest(s),Path(tmp)/'backup')
-   self.assertTrue((backup/'secrets.json').exists());self.assertEqual(s.read_text('utf-8'),'{\n  "amap": {\n    "key": "fake"\n  }\n}\n')
+   self.assertTrue((backup/('secrets.json.dpapi' if m.os.name=='nt' else 'secrets.json')).exists());self.assertEqual(s.read_text('utf-8'),'{\n  "amap": {\n    "key": "fake"\n  }\n}\n')
+   self.assertEqual(m.read_backup(backup)[1],{'keep':True})
    p.write_text('{}')
    with self.assertRaises(ValueError):m.save_bundle(p,{}, {},ch,sh,Path(tmp)/'backup')
  def test_partial_save_rolls_back(self):

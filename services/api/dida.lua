@@ -21,6 +21,50 @@ local function parse_json_body(body)
     return value
 end
 
+local function is_array(value)
+    if type(value)~='table' or value==json.null then return false end
+    local mt=getmetatable(value)
+    if mt and mt.__json_object then return false end
+    for k in pairs(value) do if type(k)~='number' or k<1 or k>#value or k%1~=0 then return false end end
+    return true
+end
+local function valid_tasks(tasks)
+    if not is_array(tasks) or #tasks>2000 then return false end
+    local ids={}
+    for _,task in ipairs(tasks) do
+        if type(task)~='table' or type(task.id)~='string' or task.id=='' or ids[task.id] then return false end
+        ids[task.id]=true
+        for _,field in ipairs({'items','childIds','tags'}) do
+            if task[field]~=nil and task[field]~=json.null and not is_array(task[field]) then return false end
+        end
+        for _,item in ipairs(task.items or {}) do if type(item)~='table' or type(item.id)~='string' then return false end end
+        for _,id in ipairs(task.childIds or {}) do if type(id)~='string' then return false end end
+    end
+    return true
+end
+
+function Dida.valid_cached_view(view)
+    if type(view)~='table' or view==json.null then return false end
+    local stack={};local count=0;local seen={}
+    for _,name in ipairs({'today','overdue','upcoming','undated'}) do
+        if view[name]~=nil then
+            if not is_array(view[name]) then return false end
+            for _,task in ipairs(view[name]) do stack[#stack+1]={task,0} end
+        end
+    end
+    while #stack>0 do
+        local entry=table.remove(stack);local node,depth=entry[1],entry[2]
+        if type(node)~='table' or node==json.null or depth>24 or seen[node] then return false end
+        seen[node]=true;count=count+1;if count>2000 then return false end
+        if type(node.id)~='string' or type(node.title)~='string' then return false end
+        if node.children~=nil and not is_array(node.children) then return false end
+        if node.checklist~=nil and not is_array(node.checklist) then return false end
+        for _,child in ipairs(node.children or {}) do stack[#stack+1]={child,depth+1} end
+        for _,item in ipairs(node.checklist or {}) do if type(item)~='table' or type(item.title)~='string' then return false end end
+    end
+    return true
+end
+
 function Dida.new(opts)
     local self = setmetatable({}, Dida)
     self.http = opts.http
@@ -40,7 +84,8 @@ end
 
 function Dida:auth_state()
     local s = self.secrets
-    if not s:secret("dida.access_token") then return "missing" end
+    local token=s:secret("dida.access_token")
+    if type(token)~='string' or token=='' then return "missing" end
     local exp = s:secret("dida.expires_at", 0)
     if exp and exp > 0 and exp <= self.now() + 300 then return "expired" end
     return "ok"
@@ -227,20 +272,6 @@ function Dida.build_view(projects, project_data, now, offset, opts)
     return view
 end
 
-local function has_open_children(task,tasks,seen)
-    seen=seen or {};if seen[task.id] then return true end;seen[task.id]=true
-    for _,item in ipairs(task.items or {}) do if tonumber(item.status)~=1 then return true end end
-    for _,child in ipairs(tasks or {}) do
-        if child.parentId==task.id and (tonumber(child.status)~=2 or has_open_children(child,tasks,seen)) then return true end
-    end
-    for _,id in ipairs(task.childIds or {}) do
-        local found=false
-        for _,child in ipairs(tasks or {}) do if child.id==id and tonumber(child.status)==2 then found=true end end
-        if not found then return true end
-    end
-    return false
-end
-
 -- User-triggered writes only. Never queue or automatically retry a completion.
 function Dida:complete(target,cb)
     if self.config:module('dida').allow_complete==false then cb(false,'READ_ONLY');return end
@@ -291,7 +322,7 @@ function Dida:complete(target,cb)
             end)
         else
             self:_api_get('/project/'..pid..'/data',function(ok,err,data)
-                if not ok or type(data)~='table' then done(false,'READ_FAILED');return end
+                if not ok or type(data)~='table' or not valid_tasks(data.tasks) then done(false,'READ_FAILED');return end
                 local fresh
                 for _,task in ipairs(data.tasks or {}) do if task.id==target.task_id then fresh=task end end
                 if not fresh then done(false,'TASK_NOT_FOUND');return end
@@ -300,19 +331,28 @@ function Dida:complete(target,cb)
                 -- Active-project responses can omit completed children. Resolve referenced IDs before deciding.
                 local fetched=0
                 local function check_children()
-                    local by_id={};for _,task in ipairs(data.tasks or {}) do by_id[task.id]=task end
-                    local visited={}
-                    local function unknown(node)
-                        if visited[node.id] then return end;visited[node.id]=true
-                        for _,id in ipairs(node.childIds or {}) do
-                            if not by_id[id] then return id,node.id end
-                            local missing,parent=unknown(by_id[id]);if missing then return missing,parent end
-                        end
-                        for _,child in ipairs(data.tasks or {}) do
-                            if child.parentId==node.id then local missing,parent=unknown(child);if missing then return missing,parent end end
-                        end
+                    local by_id,children={},{}
+                    for _,task in ipairs(data.tasks) do
+                        if type(task.projectId)=='string' and task.projectId~=target.project_id then done(false,'READ_FAILED');return end
+                        by_id[task.id]=task
+                        if type(task.parentId)=='string' then children[task.parentId]=children[task.parentId] or {};table.insert(children[task.parentId],task.id) end
                     end
-                    local missing,parent=unknown(fresh)
+                    local stack={{id=fresh.id,depth=0}};local visited={};local missing,parent;local open=false
+                    while #stack>0 do
+                        local entry=table.remove(stack);local node=by_id[entry.id]
+                        if entry.depth>24 or visited[entry.id] then done(false,'READ_FAILED');return end
+                        visited[entry.id]=true
+                        if node~=fresh and tonumber(node.status)~=2 then open=true end
+                        for _,item in ipairs(node.items or {}) do if tonumber(item.status)~=1 then open=true end end
+                        local next_ids={}
+                        for _,id in ipairs(children[node.id] or {}) do next_ids[id]=true end
+                        for _,id in ipairs(node.childIds or {}) do next_ids[id]=true end
+                        for id in pairs(next_ids) do
+                            if not by_id[id] then missing,parent=id,node.id;break end
+                            stack[#stack+1]={id=id,depth=entry.depth+1}
+                        end
+                        if missing then break end
+                    end
                     if missing then
                         fetched=fetched+1;if fetched>64 then done(false,'READ_FAILED');return end
                         self:_api_get('/project/'..pid..'/task/'..urlencode(missing),function(ok3,err3,child)
@@ -321,8 +361,14 @@ function Dida:complete(target,cb)
                         end)
                         return
                     end
-                    if has_open_children(fresh,data.tasks) then done(false,'OPEN_CHILDREN');return end
-                    post('/project/'..pid..'/task/'..tid..'/complete')
+                    if open then done(false,'OPEN_CHILDREN');return end
+                    post('/project/'..pid..'/task/'..tid..'/complete',nil,function()
+                        self:_api_get('/project/'..pid..'/task/'..tid,function(ok4,err4,check)
+                            if ok4 and type(check)=='table' and check.id==target.task_id and tonumber(check.status)==2
+                                and (type(check.projectId)~='string' or check.projectId==target.project_id) then done(true)
+                            else done(false,'WRITE_UNCONFIRMED') end
+                        end)
+                    end)
                 end
                 check_children()
             end)
@@ -355,7 +401,12 @@ function Dida:sync(cb)
     local function start()
         self:_api_get("/project", function(ok, err, projects, status)
             if not ok then cb(false, err) return end
-            if type(projects) ~= "table" then cb(false, "project list is not an array") return end
+            if not is_array(projects) then cb(false, "INVALID_PROJECT_LIST") return end
+            local project_ids={}
+            for _,p in ipairs(projects) do
+                if type(p)~='table' or type(p.id)~='string' or p.id=='' or project_ids[p.id] then cb(false,'INVALID_PROJECT_LIST');return end
+                project_ids[p.id]=true
+            end
             -- /project omits the virtual inbox. Read its data explicitly while
             -- retaining each task's concrete projectId for later completion.
             local has_inbox=false
@@ -382,6 +433,7 @@ function Dida:sync(cb)
             if #selected > 25 then
                 cb(false,"TOO_MANY_PROJECTS_SELECT_UP_TO_25");return
             end
+            if wanted_set and #selected==0 then cb(false,'SELECTED_PROJECTS_NOT_FOUND');return end
             local datas = {};local data_bytes=0
             local index = 1
             local function next_project()
@@ -389,24 +441,26 @@ function Dida:sync(cb)
                 if index > #selected then
                     local built,view=pcall(Dida.build_view,projects,datas,self.now(),self.offset,cfg)
                     if not built then cb(false,"TASK_DATA_LIMIT_OR_INVALID");return end
-                    self.cache:write("dida", {
+                    local saved=self.cache:write("dida", {
+                        cache_version = 1,
                         data = { view = view },
                         fetched_at = self.now(),
                     })
                     if self.log then self.log:info('dida sync complete projects='..#selected..' today='..#view.today) end
-                    cb(true, nil, view)
+                    cb(true, saved==false and 'CACHE_WRITE_FAILED' or nil, view)
                     return
                 end
                 local p = selected[index]
                 index = index + 1
-                self:_api_get("/project/" .. p.id .. "/data", function(ok2, err2, data, st, response_bytes)
+                self:_api_get("/project/" .. urlencode(p.id) .. "/data", function(ok2, err2, data, st, response_bytes)
                     if not ok2 then
                         cb(false, "project " .. tostring(p.name or p.id) .. ": " .. tostring(err2))
                         return
                     end
                     data_bytes=data_bytes+(response_bytes or 0)
                     if data_bytes>4*1024*1024 then cb(false,"SYNC_DATA_EXCEEDS_DEVICE_LIMIT");return end
-                    if type(data) == "table" then datas[p.id] = display_data(data) end
+                    if type(data)~='table' or not valid_tasks(data.tasks) then cb(false,'INVALID_TASK_LIST_OR_LIMIT');return end
+                    datas[p.id] = display_data(data)
                     next_project()
                 end)
             end

@@ -16,9 +16,11 @@ function M.badges(task,offset)
  local out={};local stamp=M.time_label(task,offset)
  if stamp then out[#out+1]={text=stamp,kind='time'} end
  local seen={}
- for _,tag in ipairs(type(task.tags)=='table' and task.tags or {}) do
+ local tags=type(task.tags)=='table' and task.tags or {}
+ for i=1,math.min(#tags,64) do local tag=tags[i]
   if type(tag)=='string' and tag~='' and not seen[tag] then out[#out+1]={text=tag,kind='tag'};seen[tag]=true end
  end
+ if #tags>64 then out[#out+1]={text='更多 '..(#tags-64)..' 个标签',kind='tag'} end
  return out
 end
 return M

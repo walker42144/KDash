@@ -81,13 +81,16 @@ function C.mask_cache_stats() return {bytes=mask_bytes,count=mask_count} end
 function C:text(o)
  local size=math.floor(o.size or 32);local w=self.font:measure(o.text or '',size,o.font)
  local x=o.x or 0;local y=o.y or 0
+ local clip_x0,clip_y0=math.max(0,x),math.max(0,y)
+ local clip_x1=math.min(self.width,o.w and (x+math.max(0,o.w)) or self.width)
+ local clip_y1=math.min(self.height,o.h and (y+math.max(0,o.h)) or self.height)
  if o.align=='center' then x=x+((o.w or w)-w)/2 elseif o.align=='right' then x=x+(o.w or w)-w end
  if o.valign=='center' then y=y+((o.h or size)-size)/2 end
  local baseline=y+(o.baseline or math.ceil(size*.9));local fg=colors[o.color or 'ink'] or 0
  for _,ch in ipairs(require('core.util').utf8_codepoints(o.text or '')) do
   local g=self.font:glyph(ch.cp,size,o.font);local gx=math.floor(x+g.left+.5);local gy=math.floor(baseline-g.top+.5)
-  for yy=0,g.h-1 do local dy=gy+yy;if dy>=0 and dy<self.height then
-   for xx=0,g.w-1 do local dx=gx+xx;if dx>=0 and dx<self.width then
+  for yy=0,g.h-1 do local dy=gy+yy;if dy>=clip_y0 and dy<clip_y1 then
+   for xx=0,g.w-1 do local dx=gx+xx;if dx>=clip_x0 and dx<clip_x1 then
     local a=g.pixels:byte(yy*g.w+xx+1);if a>0 then local p=dy*self.width+dx;self.buf[p]=math.floor((fg*a+tonumber(self.buf[p])*(255-a)+127)/255) end
    end end
   end end

@@ -21,19 +21,30 @@ int FT_Load_Char(kd_ft_face,unsigned long,int);
 ]]
 local F={};F.__index=F
 function F.new(opts)
+ if ffi.os=='Linux' and ffi.abi('32bit') then
+  assert(ffi.sizeof('struct kd_ft_face_rec')==96 and ffi.offsetof('struct kd_ft_face_rec','glyph')==84
+   and ffi.sizeof('struct kd_ft_slot_rec')==108 and ffi.offsetof('struct kd_ft_slot_rec','bitmap')==76,'FreeType public ABI layout mismatch')
+ end
  local self=setmetatable({faces={},cache={},cache_n=0,cache_bytes=0,max_cache_bytes=opts.max_cache_bytes or 6*1024*1024},F)
+ -- Required by the bundled device FreeType's DT_NEEDED libz.so.1. Keep this
+ -- handle alive until all FreeType faces/library have been closed.
  if ffi.os=='Linux' then self.zlib=ffi.load(os.getenv('KDASH_ZLIB') or '/mnt/us/koreader/libs/libz.so.1',true) end
  self.lib=ffi.load(opts.library or os.getenv('KDASH_FREETYPE') or '/mnt/us/koreader/libs/libfreetype.so.6')
  local p=ffi.new('void*[1]');assert(self.lib.FT_Init_FreeType(p)==0,'FreeType init failed');self.handle=p[0]
  self.cjk=opts.cjk;self.latin=opts.latin;self.display=opts.display or opts.latin
- for _,path in ipairs({self.cjk,self.latin,self.display}) do self:face(path) end
+ local ok,err=pcall(function()
+  assert(type(self.cjk)=='string' and type(self.latin)=='string','native font paths missing')
+  for _,path in ipairs({self.cjk,self.latin,self.display}) do self:face(path) end
+ end)
+ if not ok then self:close();error(err) end
  return self
 end
 function F:face(path)
  if self.faces[path] then return self.faces[path] end
  local p=ffi.new('kd_ft_face[1]');assert(self.lib.FT_New_Face(self.handle,path,0,p)==0,'cannot load font '..path)
+ self.faces[path]=p[0]
  assert(p[0].units_per_EM>=16 and p[0].units_per_EM<=16384,'unexpected FreeType face ABI')
- self.faces[path]=p[0];return p[0]
+ return p[0]
 end
 function F:glyph(cp,size,explicit)
  size=math.max(8,math.floor(size));assert(size<=512,'font size exceeds reviewed limit');local path=explicit
@@ -47,6 +58,7 @@ function F:glyph(cp,size,explicit)
  local slot=face.glyph;local b=slot.bitmap
  assert(b.pixel_mode==2 or b.width==0,'unexpected FreeType bitmap mode')
  assert(tonumber(b.rows)*tonumber(b.width)<=1024*1024,'glyph bitmap exceeds size limit')
+ assert(b.width==0 or (b.buffer~=nil and math.abs(tonumber(b.pitch))>=tonumber(b.width)),'invalid glyph bitmap buffer/pitch')
  local pixels={}
  for y=0,tonumber(b.rows)-1 do pixels[#pixels+1]=ffi.string(b.buffer+y*b.pitch,tonumber(b.width)) end
  local result={w=tonumber(b.width),h=tonumber(b.rows),left=slot.bitmap_left,top=slot.bitmap_top,advance=tonumber(slot.advance.x)/64,pixels=table.concat(pixels)}

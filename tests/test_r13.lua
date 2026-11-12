@@ -37,7 +37,7 @@ return function(T)
  T.test('weather labels stay in fixed rows even when day and night curves cross',function()
   local P=require('ui.weather_panel');local rect={x=56,y=930,w=960,h=350};local texts={}
   local no=function() end
-  local ui={display={line=no,circle=no,fill=no},typo={fit=function(_,s) return s end},text=function(_,o) texts[#texts+1]=o end}
+  local ui={theme=require('ui.theme').new({}),display={line=no,circle=no,fill=no},typo={fit=function(_,s) return s end},text=function(_,o) texts[#texts+1]=o end}
   local ctx={now=function() return now end,config={data={utc_offset_minutes=480},module=function() return {solar_location={latitude=34.2,longitude=118.8}} end}}
   P.render(ctx,ui,rect,{city='Test',desc='晴',temp=-15,humidity=100,wind_direction='东北',wind_power='≤3',days={{date='2026-11-11',high=-5,low=15},{date='2026-11-12',high=14,low=13}}},{})
   local ys={}

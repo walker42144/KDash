@@ -54,18 +54,6 @@ function M.render(ctx, ui, rect, opts)
         color = theme.colors.ink,
     })
 
-    if cfg.show_seconds then
-        local sec = os.date("!%S", now + offset * 60)
-        ui:text({
-            text = sec,
-            x = rect.x,
-            y = hero_y + math.floor(hero_size * 0.9),
-            w = rect.w,
-            size = theme.type.small,
-            align = "center",
-            color = theme.colors.muted,
-        })
-    end
 end
 
 return M

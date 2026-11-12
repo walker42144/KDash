@@ -9,20 +9,20 @@ function M.init(ctx)
  state={expanded={},page=1,saving=false,syncing=false,uncertain={}}
  state.adapter=DidaAPI.new({http=ctx.http,config=ctx.config,secrets=ctx.secrets,cache=ctx.cache,log=ctx.log,now=ctx.now,offset=ctx.config.data.utc_offset_minutes or 480})
  local cached=ctx.cache:read('dida')
- if cached and cached.data then state.view=cached.data.view;state.cached_at=cached.fetched_at end
+ if cached and cached.data and DidaAPI.valid_cached_view(cached.data.view) then state.view=cached.data.view;state.cached_at=cached.fetched_at end
  return true
 end
 function M.refresh_policy(ctx)
  return {interval=math.max(300,(ctx.config:module('dida').sync_interval_minutes or 15)*60),max_backoff=3600}
 end
 function M.refresh(ctx,keep_notice)
- if state.syncing or state.saving then return false end
+ if state.syncing or state.saving then ctx.finish(false,'BUSY');return false end
  if not keep_notice then state.notice=nil end
- if state.adapter:auth_state()=='missing' then state.error='AUTH_REQUIRED';ctx.request_update();return true end
+ if state.adapter:auth_state()=='missing' then state.error='AUTH_REQUIRED';ctx.request_update();ctx.finish(false,'AUTH_REQUIRED');return false end
  state.syncing=true
  state.adapter:sync(function(ok,err,view)
   state.syncing=false
-  if ok then state.view=view;state.cached_at=ctx.now();state.error=nil;state.uncertain={}
+  if ok then state.view=view;state.cached_at=ctx.now();state.error=nil;state.uncertain={};state.cache_warning=err=='CACHE_WRITE_FAILED'
   else state.error=tostring(err);if keep_notice then state.notice='完成已提交；列表刷新失败，请稍后刷新核对' end end
   ctx.request_update();ctx.finish(ok,err)
   if keep_notice then immediate(ctx) end
@@ -75,7 +75,8 @@ function M.on_action(ctx,action)
    for _,item in ipairs(task.checklist or {}) do if item.id==action.item_id then item.status=1 end end
   else task.completed=true end
   -- Persist only server-acknowledged state, never optimistic/offline completion.
-  ctx.cache:write('dida',{data={view=state.view},fetched_at=state.cached_at or ctx.now()})
+  local saved=ctx.cache:write('dida',{cache_version=1,data={view=state.view},fetched_at=state.cached_at or ctx.now()})
+  state.cache_warning=saved==false
   state.notice=action.item_id and '子项已完成，父任务保留' or '任务已完成'
   immediate(ctx);M.refresh(ctx,true)
  end)
@@ -117,6 +118,9 @@ function M.render(ctx,ui,rect,opts)
  local y=by+t.line*3+t.space.sm;local row_h=math.max(44,ui.typo:line_height(32))
  local status_h=math.max(40,ui.typo:line_height(micro))
  local available=rect.y+rect.h-y-status_h
+ if available<44 or rect.w<180 then
+  ui:text({text='待办区域太小，请减小字号或恢复默认布局',x=rect.x,y=rect.y,w=rect.w,h=rect.h,size=micro});return
+ end
  local rows=rows_for(view,ctx,selected);local page_rows={{}};local used=0
  for _,row in ipairs(rows) do
   local task,item=row.task,row.item;local indent=math.min(row.depth,4)*32
@@ -143,10 +147,15 @@ function M.render(ctx,ui,rect,opts)
     cursor=cursor+1
    end
    chunk.h=ui:task_layout({w=row.width},chunk.title,chunk.meta,chunk.opts).h
+   if chunk.h>available then
+    chunk.opts.badges={};chunk.title=ui.typo:fit(chunk.title,math.max(1,row.width-60),row.opts.size)
+    chunk.h=44
+   end
    chunks[#chunks+1]=chunk;first_chunk=false
   until cursor>#all
   for _,chunk in ipairs(chunks) do
    if used+chunk.h>available and #page_rows[#page_rows]>0 then page_rows[#page_rows+1]={};used=0 end
+   if #page_rows>512 then ui:empty(rect,'待办分页超出设备限制，请在电脑端缩小清单范围');return end
    page_rows[#page_rows][#page_rows[#page_rows]+1]=chunk;used=used+chunk.h
   end
  end
@@ -166,7 +175,8 @@ function M.render(ctx,ui,rect,opts)
   y=y+row.h
  end
  if #rows==0 then ui:empty({x=rect.x,y=y,w=rect.w,h=row_h*2},'今天没有待办任务') end
- local status=state.notice or (state.error and '同步失败，保留缓存；点击空白处刷新') or (state.cached_at and ('同步于 '..timeutil.format_time(state.cached_at,ctx.config.data.utc_offset_minutes or 480,true))) or '尚未同步'
+ local stale=state.cached_at and ctx.now()-state.cached_at>math.max(300,(ctx.config:module('dida').sync_interval_minutes or 15)*60)*2
+ local status=(state.error and '同步失败，保留缓存；点击空白处刷新') or state.notice or (state.cache_warning and '已同步，缓存保存失败') or (stale and '缓存较旧，请刷新核对') or (state.cached_at and ('同步于 '..timeutil.format_time(state.cached_at,ctx.config.data.utc_offset_minutes or 480,true))) or '尚未同步'
  local sy=rect.y+rect.h-status_h;local nav_w=250
  ui:text({text=ui.typo:fit(status,rect.w-nav_w-16,micro),x=rect.x,y=sy+7,w=rect.w-nav_w-16,size=micro,color=t.colors.muted})
  local x=rect.x+rect.w-nav_w

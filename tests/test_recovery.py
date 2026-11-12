@@ -62,34 +62,34 @@ lipc-set-prop() { echo "lipc $*" >> "$RUN/trace"; }
  print('PASS watchdog: orphaned supervisor restores UI')
  # Supervisor remains alive until guard sends TERM: exercise the timeout branch.
  run2=base/'timeout';shutil.copytree(run,run2)
- for name in ['recovery.done','guard.ready','trace']:
+ for name in ['recovery.done','guard.ready','trace','recovery-worker.pid']:
   (run2/name).unlink(missing_ok=True)
  (run2/'supervisor.pid').write_text('30 200\n',newline='\n')
  (run2/'limit').write_text('1\n',newline='\n')
  c=(run2/'session-common.sh').read_text('utf-8')
  c=c.replace('kill() { echo "$*" >> "$RUN/trace"; return 0; }', '''kill() {
  echo "$*" >> "$RUN/trace"
- if [ "$1" = -0 ]; then [ ! -f "$RUN/parent-dead" ]; return $?; fi
+ if [ "$1" = -0 ]; then [ "$2" != 30 ] || [ ! -f "$RUN/parent-dead" ]; return $?; fi
  if [ "$1" = -TERM ] && [ "$2" = 30 ]; then : > "$RUN/parent-dead"; fi
  return 0
 }''')
  (run2/'session-common.sh').write_text(c,encoding='utf-8',newline='\n')
  f=run2/'guard.sh';f.write_text(guard.replace(posix(run),posix(run2)),encoding='utf-8',newline='\n')
  proc=subprocess.run([SH,'-c',f"export PATH=/usr/bin:/bin:$PATH; /bin/sh '{posix(f)}' '{posix(run2)}'"],capture_output=True,text=True,timeout=10)
- assert proc.returncode==0,(proc.stdout,proc.stderr)
+ assert proc.returncode==0,(proc.returncode,proc.stdout,proc.stderr,(run2/'logs/session.log').read_text(),(run2/'trace').read_text())
  assert (run2/'recovery.done').exists() and (run2/'parent-dead').exists()
  assert '-TERM 30' in (run2/'trace').read_text()
  print('PASS watchdog: deadline terminates supervisor and resumes UI')
  # Unlimited sessions must survive beyond the trial deadline, yet recover on parent death.
  run3=base/'unlimited';shutil.copytree(run,run3)
- for name in ['recovery.done','guard.ready','trace']:
+ for name in ['recovery.done','guard.ready','trace','recovery-worker.pid']:
   (run3/name).unlink(missing_ok=True)
  (run3/'supervisor.pid').write_text('30 200\n',newline='\n')
  (run3/'limit').write_text('0\n',newline='\n')
  c=(run3/'session-common.sh').read_text('utf-8')
  c=c.replace('kill() { echo "$*" >> "$RUN/trace"; return 0; }', '\n'.join([
  'kill() {', ' echo "$*" >> "$RUN/trace"',
- ' if [ "$1" = -0 ]; then [ ! -f "$RUN/parent-dead" ]; return $?; fi', ' return 0', '}']))
+ ' if [ "$1" = -0 ]; then [ "$2" != 30 ] || [ ! -f "$RUN/parent-dead" ]; return $?; fi', ' return 0', '}']))
  c=c.replace('sleep() { :; }', 'ticks=0\nsleep() { ticks=$((ticks+1)); if [ "$ticks" -ge 185 ]; then : > "$RUN/parent-dead"; fi; }')
  (run3/'session-common.sh').write_text(c,encoding='utf-8',newline='\n')
  f=run3/'guard.sh';f.write_text(guard.replace(posix(run),posix(run3)),encoding='utf-8',newline='\n')
@@ -101,7 +101,7 @@ lipc-set-prop() { echo "lipc $*" >> "$RUN/trace"; }
  print('PASS watchdog: unlimited session survives 180 ticks and restores UI after parent death')
  # A dead power subscriber must not leave a dashboard that cannot observe wake/sleep.
  run4=base/'monitor-dead';shutil.copytree(run,run4)
- for name in ['recovery.done','guard.ready','trace']:
+ for name in ['recovery.done','guard.ready','trace','recovery-worker.pid']:
   (run4/name).unlink(missing_ok=True)
  (run4/'supervisor.pid').write_text('30 200\n',newline='\n')
  (run4/'power-monitor.pid').write_text('40 999\n',newline='\n')
@@ -116,7 +116,7 @@ lipc-set-prop() { echo "lipc $*" >> "$RUN/trace"; }
  print('PASS watchdog: dead power subscriber restores original UI')
  # Normal recovery owns the lock: a deliberately stopped subscriber is not a fault.
  run5=base/'normal-cleanup';shutil.copytree(run4,run5)
- for name in ['recovery.done','guard.ready','trace']:
+ for name in ['recovery.done','guard.ready','trace','recovery-worker.pid']:
   (run5/name).unlink(missing_ok=True)
  (run5/'recover.pid').write_text('50 200\n',newline='\n')
  c=(run5/'session-common.sh').read_text('utf-8').replace('sleep() { :; }', 'ticks=0; sleep() { ticks=$((ticks+1)); if [ "$ticks" -ge 2 ]; then : > "$RUN/recovery.done"; fi; }')

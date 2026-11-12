@@ -22,7 +22,9 @@ function storage:read(path, max_bytes)
 end
 
 function storage:exists(path)
-    return util.path_exists(self:path(path))
+    local f=io.open(self:path(path),'rb')
+    if not f then return false end
+    f:close();return true
 end
 
 function storage:write(path, data)
@@ -31,11 +33,15 @@ end
 
 function storage:write_atomic(path, data)
     local p = self:path(path)
-    local tmp = p .. ".tmp"
+    local tmp = p .. ".tmp-" .. tostring(os.time()) .. "-" .. tostring(math.random(1,2147483647)) .. "-" .. tostring({}):gsub('[^%w]','')
     local ok, err = util.write_file(tmp, data)
     if not ok then return false, err end
-    if self.windows then os.remove(p) end
-    local rok, rerr = os.rename(tmp, p)
+    local rok,rerr
+    if self.windows then
+        local ffi=require('ffi');ffi.cdef[[int MoveFileExA(const char*,const char*,unsigned long);]]
+        rok=ffi.load('kernel32').MoveFileExA(tmp,p,9)~=0
+        if not rok then rerr='atomic replace failed' end
+    else rok,rerr=os.rename(tmp,p) end
     if not rok then
         os.remove(tmp)
         return false, rerr

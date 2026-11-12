@@ -1,7 +1,7 @@
 -- Weather panel composed as one canvas: observational data, daily forecast, solar.
 local P={};local time=require('core.timeutil');local Solar=require('services.solar')
 local function text(ui,t,x,y,w,s,align,color)
- ui:text({text=t or '',x=x,y=y,w=w,size=s,align=align,color=color or 'ink'})
+ ui:text({text=t or '',x=x,y=y,w=w,size=s,align=align,color=color or ui.theme.colors.ink})
 end
 local function segment(d,x,y,s,points,width)
  for i=2,#points do d:line(x+points[i-1][1]*s,y+points[i-1][2]*s,x+points[i][1]*s,y+points[i][2]*s,'ink',width or 3) end
@@ -43,7 +43,14 @@ function P.solar(ctx)
  return Solar.calculate(time.date_key(ctx.now(),ctx.config.data.utc_offset_minutes or 480),loc.latitude,loc.longitude,ctx.config.data.utc_offset_minutes or 480)
 end
 function P.render(ctx,ui,r,view,meta)
- local d=ui.display;local x,y,w=r.x,r.y,r.w
+ local raw=ui.display
+ local function color(c) return c=='ink' and ui.theme.colors.ink or c=='paper' and ui.theme.colors.paper or c=='gray4' and ui.theme.colors.faint or c end
+ local d={
+  line=function(_,x0,y0,x1,y1,c,...) return raw:line(x0,y0,x1,y1,color(c),...) end,
+  circle=function(_,x,y,radius,c,...) return raw:circle(x,y,radius,color(c),...) end,
+  fill=function(_,rect,c) return raw:fill(rect,color(c)) end,
+ }
+ local x,y,w=r.x,r.y,r.w
  -- Four independent bands; text never follows the moving chart points.
  local sc=math.min(1,(r.h-24)/330)
  local function Y(a) return y+math.floor(a*sc) end

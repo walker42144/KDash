@@ -92,6 +92,7 @@ function Http:request(opts, cb)
         done = prefix .. ".done",
         pid = prefix .. ".pid",
         cancel = prefix .. ".cancel",
+        worker = prefix .. ".worker.pid",
     }
     local script = self:build_script(opts, paths)
     local ok, err = self.storage:write(paths.script, script)
@@ -113,12 +114,18 @@ function Http:request(opts, cb)
     }
     self.jobs[id] = job
     if self.log then self.log:debug("http start: " .. job.label) end
-    self.runner:spawn_script(paths.script)
+    local launched=self.runner:spawn_script(paths.script,paths.worker)
+    if launched~=nil and launched~=0 and launched~=true then
+        -- No process exists to consume a cancellation marker in this case.
+        job.done_called=true;self.jobs[id]=nil
+        for _,p in pairs(paths) do self.storage:remove(p) end
+        cb({ok=false,error='spawn failed',status=0,body=''});return nil
+    end
     return id
 end
 
 local function read_number(storage, path)
-    local data = storage:read(path)
+    local data = storage:read(path,128)
     if not data then return nil end
     return tonumber(util.trim(data))
 end
@@ -139,10 +146,14 @@ function Http:_finish(job, result)
     local unfinished=not self.storage:exists(paths.done)
     if unfinished then
         self.storage:write(paths.cancel,"cancelled\n")
-        if self.runner.stop_http then self.runner:stop_http(paths.pid) end
+        if self.runner.cancel_http then
+            -- Clear tombstones only after both owned processes are confirmed
+            -- gone. An uninterruptible process retains its cancellation marker.
+            if self.runner:cancel_http(paths)==0 then unfinished=false end
+        elseif self.runner.stop_http then self.runner:stop_http(paths.pid) end
     end
     for name,p in pairs(paths) do
-        if not unfinished or (name~='pid' and name~='cancel') then self.storage:remove(p) end
+        if not unfinished or (name~='pid' and name~='worker' and name~='cancel') then self.storage:remove(p) end
     end
     if self.log then
         if result.ok then

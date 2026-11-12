@@ -1,191 +1,31 @@
-> 历史参考：此文档来自 Trae v0.1，不能作为候选版安装／验证状态说明。当前步骤见项目根目录 README.md。
+# r16 USB 候选安装与回退
 
-# 安装、升级与卸载
+本轮只交付本地候选，没有写入 Kindle。首次部署前仍应确认实际盘符和替换清单。以设备 system/version.txt、documents 和 Kindle USB 标识为准，不能假定永远是 K:。
 
-## 0. 前置条件
+1. 先让当前 KDash 正常退出，确认已回原版界面，再连接 USB。`session-limit=0` 不能靠“等待三分钟”代替退出。
+2. 完整备份 Kindle 的 `kdash-candidate/package`、三个书库 Scriptlet 和 `kdash-candidate/screensaver`；配置/密钥另作私密备份，不上传。
+3. 在电脑解压 USB 包到新目录。核对 manifest.json 的文件及 SHA-256。建议把完整 package 先复制为 `kdash-candidate/package-r16-staged`，逐文件核对后把旧 package 改名 `package-before-r16-日期`，再将 staged 改名 package。不要直接覆盖正在运行的目录。
+4. 更新 documents 中同名的 `Kindle Dashboard Candidate.sh`、`KDash Candidate Recovery.sh`、`KDash Candidate Diagnostics.sh`。应用仍是同一个书库条目；若 Kindle 显示旧封面缓存，须另查书库注册机制，不重新安装 KUAL。
+5. 核对 `kdash-candidate/screensaver/wallpaper.y8` 为 1,552,256 字节；本轮壁纸内容不变，已有文件哈希相同不需要替换。wallpaper.ttf 是旧路径兼容资源。首次安装可复制包中两者。
+6. **保留已有根目录 config.json、secrets.json、cache、state、logs**。根 config 是默认模板，覆盖会丢失事件、刷新周期、城市/经纬度和清单选择。不要动 KOReader、微信读书或系统文件。
+7. 安全弹出 USB，在 Kindle 原版书库点 `Kindle Dashboard Candidate`。
 
-- KPW3 已越狱，已安装 KPM。
-- 已确认设备固件、ABI、触摸设备、FB 尺寸（见 `docs/DEVICE_DIAGNOSTICS.md`）。
-- 不需要 KUAL；KDash 不依赖 KOReader。
+新 package 内包括 app、runtime、launcher、session-limit。launcher 新增 `command-timeout.sh`、`power-monitor.sh`，不能只挑 Lua 文件升级。运行时仍拷贝到独立 `/var/tmp/kdash-candidate/run.*`；升级的 ELF 与 r15 相同，不因主机测试成功而推定新的 ARM ABI 兼容。
 
-## 1. 先做只读诊断
+## 本次实机测试顺序
 
-```sh
-# 把 scripts/kindle-diagnose.sh 复制到 /mnt/us/ 后通过 SSH 运行
-sh /mnt/us/kindle-diagnose.sh > /mnt/us/kdash-diagnostics.txt 2>&1
-```
+1. 打开一次，检查同屏布局、标签/时间框和右侧优先级；不勾选真实任务作破坏性试验。
+2. 短按电源键：应显示给定壁纸；停留超过一个显示周期，确认无界面叠画；再短按一次，回面板且只有一次唤醒重绘。重复 5 次，记录是否有额外闪屏或延迟。
+3. 手动刷新一次；确认可退出且返回原版。退出后等待原版完全恢复，再打开；再做一次“退出后立即打开”，用于区分锁等待与启动耗时。
+4. 收集 `kdash-candidate/logs/session.log`（`launch_requested`、`session_begin ... lock_wait_ticks`、`app_start`、`app_exit rc`、`restore_begin/done`）及 `kdash.log`（电源、刷新、同步代码）。日志对外分享前删去账号、任务私密内容和令牌；本版主动日志不输出令牌。
+5. 最后做长时间静置与电池/前光观察；主机千帧测试不代表 24～72 小时实机稳定性或续航。
 
-重点看：
+## 回退
 
-- `virtual_size`：应为 `1072,1448`
-- `/dev/input/event1` 是否存在
-- `power_supply` 节点名与 `capacity/status`
-- `curl`、CA、`lipc-*`、`fbink`、`sqlite3`
-- upstart / sysv、`pidof cvm`
-- `/mnt/us` 是否 noexec
-- `/usr/java/lib/fonts`
+先退出 r16 并连接 USB。将新 package 改名保留，将完整的 `package-before-r16-日期` 改回 package；恢复备份的三个 documents Scriptlet。只有壁纸实际换过才恢复壁纸。config、secrets、cache、state 保持，勿用新安装模板覆盖。安全弹出，再从书库启动旧版。
 
-安装后也可点击 **KDash Diagnostics** scriptlet 生成同一报告。
+## 配置工具保存中断
 
-## 2. 构建
+普通打开/读取不会自动恢复或写入 Kindle。发现 `.kdash-save.pending` 时，先保持 USB 连接，在新版配置工具点击“恢复未完成保存”，选择配置所在目录并确认回退上次未完成保存，再重新读取。恢复失败要保留 pending 文件，不要手动删除后继续启动：设备端会拒绝读取半套配置。
 
-```sh
-python scripts/build_package.py
-```
-
-产物：
-
-```text
-build/kdash_0.1.0_kindlepw2.kpkg
-```
-
-构建脚本会校验 `manifest.json`、`runtime/luajit`、`runtime/fbink`、字体、launcher 是否存在。
-包是 KPM manifest v2 的 tar.gz。
-
-## 3. KPM 安装（推荐）
-
-1. 将 `.kpkg` 加入 KPM 软件源，或使用当前 KPM 版本支持的本地安装方式。
-2. KPM 解包后执行 `install.sh`（包目录内）：
-   - 创建 `/mnt/us/kdash/{cache,logs,state,assets}`
-   - 首次安装复制默认配置与空 secrets
-   - 复制字体/封面
-   - 写 `/mnt/us/documents/KDash.sh` 与诊断 scriptlet
-3. 触发书库扫描：
-
-```sh
-lipc-set-prop com.lab126.scanner reScanFile /mnt/us/documents/KDash.sh
-```
-
-4. 书库出现 **Kindle Dashboard**，点击进入。
-
-> KPM 的本地安装 UI 随版本不同。如果找不到入口，使用手动安装；KDash 本身不依赖 KPM 运行。
-
-## 4. 手动安装（不依赖 KPM 启动）
-
-1. 在 PC 上把 `.kpkg` 改名为 `.tar.gz` 并解压。
-2. 在 Kindle USB 根目录创建：
-
-```text
-/mnt/us/kdash/pkg/      # 放解压后的 manifest.json、app/、launcher/、runtime/...
-```
-
-3. SSH 执行：
-
-```sh
-sh /mnt/us/kdash/pkg/install.sh          # 初始化数据目录/字体（会尝试写 scriptlet）
-chmod 755 /mnt/us/kdash/pkg/launcher/kdash-launch.sh
-mkdir -p /mnt/us/kdash/assets
-cp /mnt/us/kdash/pkg/app/assets/cover.png /mnt/us/kdash/assets/cover.png
-cat > /mnt/us/documents/KDash.sh <<'EOF'
-#!/bin/sh
-# Name: Kindle Dashboard
-# Author: KDash
-# Icon: /mnt/us/kdash/assets/cover.png
-# DontUseFBInk
-exec /bin/sh /mnt/us/kdash/pkg/launcher/kdash-launch.sh
-EOF
-chmod 755 /mnt/us/documents/KDash.sh
-lipc-set-prop com.lab126.scanner reScanFile /mnt/us/documents/KDash.sh
-```
-
-4. 点击书库条目。
-
-手动模式下不要运行 `kpm launch`；入口直接执行 launcher。
-
-## 5. 首次运行
-
-启动时 launcher 会：
-
-1. 检查 touch/字体/fbink/luajit；缺失则拒绝启动，避免“进入后无法退出”。
-2. 获取单实例锁。
-3. 停止 `lab126_gui`（或 sysv framework）。
-4. 把二进制复制到 `/var/tmp/kdash-bin`（`/mnt/us` 常为 noexec）。
-5. 启动 `luajit app/main.lua`。
-6. 退出（正常/异常）时重启框架并回到书库首页。
-
-如果首次启动黑屏：
-
-```sh
-cat /mnt/us/kdash/logs/kdash.log
-cat /mnt/us/kdash-diagnostics.txt
-```
-
-## 6. 退出
-
-- 界面右上角 **X** → **EXIT**。
-- launcher 恢复框架并返回书库。
-- 如果框架没有恢复：长按电源重启；或 SSH 执行：
-
-```sh
-cd / && start lab126_gui          # upstart
-# 或
-/etc/init.d/framework start       # sysv
-```
-
-- 不要 `kill -9` launcher；它会跳过恢复（SIGKILL 不可捕获）。
-
-## 7. 升级
-
-KPM 升级流程：
-
-1. `uninstall.sh upgrade`（保留 scriptlet 与数据）
-2. 删除旧包文件
-3. 解包新包
-4. `install.sh upgrade`
-
-KDash 保留：
-
-- `/mnt/us/kdash/config.json`
-- `/mnt/us/kdash/secrets.json`
-- 倒计时事件（在 config 内）
-- 模块配置
-- 缓存（可重建）
-
-`config.schema_version` 变化时由 `core/config.lua` 的迁移函数升级。
-
-手动升级：替换 `/mnt/us/kdash/pkg/` 内容，保留 `/mnt/us/kdash/*.json`，重新执行 `install.sh`。
-
-## 8. 卸载
-
-KPM 卸载会执行 `uninstall.sh`：
-
-- 删除 `/mnt/us/documents/KDash.sh`
-- 删除 `/mnt/us/documents/KDash Diagnostics.sh`
-- 删除 `/var/tmp/kdash-bin`
-- 删除运行锁
-- **保留** `/mnt/us/kdash`（配置/缓存/凭证）
-
-彻底清理：
-
-```sh
-rm -rf /mnt/us/kdash
-```
-
-不影响 KOReader、KPM 或原版系统。
-
-## 9. 恢复与故障
-
-| 现象 | 处理 |
-|---|---|
-| 书库没有条目 | 重新扫描；检查 scriptlet 是否在 `/mnt/us/documents/KDash.sh` |
-| 点击无反应 | 检查 KPM 路径 `/var/local/kmc/bin/kpm`；查看 `logs/kdash.log` |
-| 黑屏/冻结 | 长按电源重启；框架开机恢复 |
-| 退出后仍在 KDash | 等待 launcher 重启框架；SSH `start lab126_gui` |
-| 触摸无效 | 检查 `/dev/input/event1`；launcher 会拒绝启动 |
-| 中文方块 | 检查字体路径/包内字体是否存在 |
-| 网络模块一直离线 | 检查 `curl --version`、CA、Wi-Fi；查看日志 |
-
-更多见 `docs/TROUBLESHOOTING.md`。
-
-## 10. 验收时必须记录
-
-- 设备型号、固件版本、`/etc/prettyversion.txt`
-- `kdash-diagnostics.txt`
-- `/mnt/us/kdash/logs/kdash.log`
-- 启动/退出是否恢复书库
-- 触摸是否准确（尤其右上角 X）
-- 局部刷新与残影
-- Wi-Fi 在休眠/唤醒后的状态
-- KOReader 是否仍可正常启动
-
-没有这些证据，不应宣称实机通过。
+单个文件用原子替换，但 FAT/USB 不能实现两个文件同时提交；中断可能留下新旧混合，依靠 journal 回退，不承诺拔盘瞬间两者永远同版。DPAPI 密钥备份只可由原 Windows 用户解密；“读取备份”只是载入表单，点击保存后才写当前目标。旧版明文备份不自动删除。

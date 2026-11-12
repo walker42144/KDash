@@ -99,7 +99,7 @@ return function(T)
  T.test('many tags continue across local pages without touching status line or repeating completion controls',function()
   local M,ctx,view,requests,events,render=fixture()
   local parent=view.today[1];parent.children={};parent.checklist={};parent.tags={}
-  for i=1,80 do parent.tags[i]='标签'..i end
+  for i=1,80 do parent.tags[i]='用于测试分页的较长标签'..i end
   local complete_count=0;local seen_pages=0
   for page=1,30 do
    render();seen_pages=seen_pages+1;local next_hit

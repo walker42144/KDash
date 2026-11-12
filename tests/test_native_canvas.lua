@@ -1,5 +1,5 @@
 -- Host regression for the actual native renderer, with a host FreeType DLL.
-local root='outputs/KDash-main';package.path=root..'/?.lua;'..root..'/?/init.lua;'..package.path
+local root=(arg and arg[1]) or '.';package.path=root..'/?.lua;'..root..'/?/init.lua;'..package.path
 local ffi=require('ffi');local D=require('platform.kindle.display_native')
 local d=D.new({fonts={library=assert(os.getenv('KDASH_TEST_FREETYPE')),cjk=root..'/assets/fonts/SourceHanSansCN-Medium.ttf',latin=root..'/assets/fonts/KumbhSans-500.ttf',display=root..'/assets/fonts/KumbhSans-600.ttf'}})
 local refreshes,commits=0,0
@@ -16,4 +16,12 @@ local B=require('platform.kindle.framebuffer');local bytes=ffi.new('unsigned cha
 local fb=setmetatable({geometry={width=3,height=4,stride=8,xoffset=2,yoffset=1},bytes=bytes},B)
 local tiny=ffi.new('unsigned char[12]');ffi.fill(tiny,12,99);fb:commit(tiny)
 for y=0,7 do for x=0,7 do local visible=(y>=1 and y<5 and x>=2 and x<5);assert(bytes[y*8+x]==(visible and 99 or 117)) end end
-d:close();print(string.format('PASS native canvas: real FreeType mixed fonts; no per-glyph subprocess; unchanged frame skipped; one refresh per screen; wallpaper restore; clipped mmap padding; host CPU %.3fs',os.clock()-start))
+-- Actual diff rectangle, GC16 waveform, and bounded transient failure retry.
+local commands={};d.runner={run=function(_,args) commands[#commands+1]=table.concat(args,' ');return 0,'' end}
+d:begin_frame(false);d:fill({x=900,y=1200,w=2,h=3},'ink');assert(d:flush({}))
+assert(commands[1]:find('%-W GC16'));assert(commands[1]:find('--refresh=top=1200,left=900,width=2,height=3',1,true))
+local tries=0;d.runner={run=function() tries=tries+1;return tries==1 and 1 or 0,'' end}
+d:begin_frame(true);assert(d:flush({full=true}));assert(tries==2 and d.available)
+d.runner={run=function() return 1,'' end};d:begin_frame(true);assert(not d:flush({full=true}));assert(not d.available)
+d.runner={run=function() return 0,'' end};d:prepare_screensaver('no-such-wallpaper-dir');assert(d:show_screensaver(),'missing wallpaper must have a working fallback')
+d:close();print(string.format('PASS native canvas: real FreeType; exact partial bbox/GC16; unchanged frame skipped; transient retry; repeated failure closed; wallpaper/fallback; mmap padding; host CPU %.3fs',os.clock()-start))

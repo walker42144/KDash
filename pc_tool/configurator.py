@@ -9,7 +9,8 @@ HOME=Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__file
 def default_config():
  f=RESOURCE/'default-config.json'
  if not f.exists():f=RESOURCE/'config/default.json'
- return json.loads(f.read_text('utf-8'))
+ if f.exists():return json.loads(f.read_text('utf-8'))
+ return {'schema_version':1,'language':'zh','utc_offset_minutes':480,'ui':{'refresh_minutes':1,'minimal':True},'modules':{'countdown':{'events':[{'id':'exam','name':'示例事件','date':'2030-01-01'}]}}}
 class ConfigApp:
  def __init__(self,root,config_path=None):
   self.root=root;root.title('KDash 配置工具');root.geometry('820x800');root.minsize(760,780)
@@ -24,6 +25,8 @@ class ConfigApp:
   title=ttk.Frame(head);title.pack(side='left');ttk.Label(title,text='KDash 配置工具',style='Title.TLabel').pack(anchor='w');ttk.Label(title,text='连接 Kindle，设置桌面上的信息。',style='Muted.TLabel').pack(anchor='w')
   box=ttk.Frame(root,padding=(28,4,28,12));box.pack(fill='x');ttk.Button(box,text='识别 Kindle',command=self.detect).pack(side='left');ttk.Button(box,text='打开配置文件…',command=self.open_file).pack(side='left',padx=8)
   self.location=tk.StringVar(value='未选择配置文件');ttk.Label(root,textvariable=self.location,style='Muted.TLabel',wraplength=750).pack(anchor='w',padx=30,pady=(0,12))
+  ttk.Button(box,text='读取备份…',command=self.read_backup).pack(side='left')
+  ttk.Button(box,text='恢复未完成保存',command=self.recover_save).pack(side='left',padx=8)
   tabs=ttk.Notebook(root);tabs.pack(fill='both',expand=True,padx=28)
   frames={}
   for key,title in [('event','事件倒计时'),('dida','滴答清单'),('weather','天气'),('refresh','刷新与省电'),('display','显示与触控')]:
@@ -188,12 +191,26 @@ class ConfigApp:
    backup,ch,sh=model.save_bundle(path,c,s,ch,sh,HOME/'config-backups')
    self.path=path;self.config,self.private=c,s;self.config_hash,self.secret_hash=ch,sh;self.location.set(str(path));self.status.set('保存成功。备份：'+str(backup));messagebox.showinfo('保存成功','config.json 和 secrets.json 已保存。\n安全弹出 USB 后重新打开 KDash 生效。\n备份位于：'+str(backup),parent=self.root)
   except (ValueError,OSError) as e:messagebox.showerror('保存失败',str(e),parent=self.root)
+ def recover_save(self):
+  folder=filedialog.askdirectory(title='选择需要恢复配置的目录',parent=self.root)
+  if not folder:return
+  name=str(Path(folder)/'config.json')
+  if not messagebox.askyesno('恢复未完成保存','将依据保存记录恢复上次完整的配置与密钥。\n这会撤销上次未完成的保存。是否继续？',parent=self.root):return
+  try:model.recover_bundle(name);self.load_path(Path(name))
+  except (OSError,ValueError) as e:messagebox.showerror('恢复失败',str(e),parent=self.root)
+ def read_backup(self):
+  folder=filedialog.askdirectory(title='选择 KDash 配置备份目录',parent=self.root)
+  if not folder:return
+  try:
+   c,s=model.read_backup(folder)
+   self.config,self.private=c,s;self.populate();self.status.set('备份已载入表单；点击保存配置后才写入当前目标。')
+  except (OSError,ValueError,KeyError) as e:messagebox.showerror('备份读取失败',str(e),parent=self.root)
  def worker(self,fn,success):
   if self.busy:return
   self.busy=True;self.save_button.state(['disabled']);self.status.set('正在连接，请稍候…')
   def run():
    try:self.queue.put((success,fn(),None))
-   except Exception as e:self.queue.put((None,None,str(e) if isinstance(e,ValueError) else '操作失败，请检查配置与网络'))
+   except Exception as e:self.queue.put((None,None,str(e) if isinstance(e,ValueError) else '操作失败（'+type(e).__name__+'），请检查配置与网络'))
   threading.Thread(target=run,daemon=True).start()
  def drain(self):
   try:
@@ -202,7 +219,7 @@ class ConfigApp:
     if error:self.status.set(error);messagebox.showerror('连接未完成',error,parent=self.root)
     else:
      try:cb(value)
-     except Exception:self.status.set('返回数据处理失败，请检查配置后重试')
+     except Exception as e:self.status.set('返回数据处理失败（'+type(e).__name__+'），请检查配置后重试')
   except queue.Empty:pass
   self.root.after(150,self.drain)
  def authorize(self):
@@ -226,5 +243,23 @@ class ConfigApp:
  def weather_test(self):
   v=self.values();self.worker(lambda:model.test_weather(v),lambda text:(self.status.set('连接成功：'+text),messagebox.showinfo('天气连接成功',text,parent=self.root)))
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--config');args=ap.parse_args();root=tk.Tk();ConfigApp(root,args.config);root.mainloop()
-if __name__=='__main__':main()
+ ap=argparse.ArgumentParser();ap.add_argument('--config');ap.add_argument('--self-test-report');args=ap.parse_args()
+ if args.self_test_report:
+  # Explicit packaged-artifact check: hidden widgets and temporary fake config.
+  # It bypasses USB detection and never accesses personal services.
+  import tempfile
+  result={'ok':False,'revision':'r16-review-fixes'}
+  try:
+   model.detect_kindles=lambda:[]
+   root=tk.Tk();root.withdraw();app=ConfigApp(root)
+   root.update_idletasks();assert len(app.fields)>20;assert (RESOURCE/'config/default.json').is_file()
+   with tempfile.TemporaryDirectory(prefix='kdash-exe-check-') as tmp:
+    p=Path(tmp)/'config.json';p.write_text('{}');p.with_name('secrets.json').write_text('{"test":"fake"}')
+    folder,_,_=model.save_bundle(p,{'test':True},{},model.digest(p),model.digest(p.with_name('secrets.json')),Path(tmp)/'backup')
+    assert model.read_backup(folder)[1]=={'test':'fake'}
+   root.destroy();result.update(ok=True,widgets=True,resource=True,transaction=True,encrypted_backup=sys.platform=='win32')
+  except Exception as e:result['error_type']=type(e).__name__
+  Path(args.self_test_report).write_text(json.dumps(result,indent=2),'utf-8')
+  return 0 if result['ok'] else 1
+ root=tk.Tk();ConfigApp(root,args.config);root.mainloop();return 0
+if __name__=='__main__':sys.exit(main())

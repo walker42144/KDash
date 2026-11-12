@@ -90,11 +90,11 @@ function Scheduler:is_due(id, now)
 end
 
 -- 返回本批次应刷新的模块 id 列表（合并相近的到期任务）。
-function Scheduler:tick(now)
+function Scheduler:tick(now,allowed)
     local earliest = nil
     for _, id in ipairs(self.order) do
         local job = self.jobs[id]
-        if job and not job.running and job.next_due <= now then
+        if job and (not allowed or allowed[id]) and not job.running and job.next_due <= now then
             if not earliest or job.next_due < earliest then earliest = job.next_due end
         end
     end
@@ -103,7 +103,7 @@ function Scheduler:tick(now)
     local out = {}
     for _, id in ipairs(self.order) do
         local job = self.jobs[id]
-        if job and not job.running and job.next_due <= (job.policy.no_coalesce and now or limit) then
+        if job and (not allowed or allowed[id]) and not job.running and job.next_due <= (job.policy.no_coalesce and now or limit) then
             out[#out + 1] = id
             job.running = true
         end

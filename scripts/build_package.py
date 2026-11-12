@@ -3,6 +3,11 @@ import hashlib,json,shutil,zipfile,subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT.parent
 STAGE=OUT/'KDash-USB-candidate'
+assert STAGE.resolve().parent==OUT.resolve() and STAGE.name=='KDash-USB-candidate'
+required=['screensaver/wallpaper.y8','assets/fonts/SourceHanSansCN-Medium.ttf','assets/fonts/KumbhSans-500.ttf','assets/fonts/KumbhSans-600.ttf','launcher/command-timeout.sh']
+for name in required:
+ if not (ROOT/name).is_file():raise SystemExit('BUILD FAILED: required resource missing: '+name)
+if (ROOT/'screensaver/wallpaper.y8').stat().st_size!=1072*1448:raise SystemExit('BUILD FAILED: wallpaper.y8 must be 1072x1448 Y8')
 if STAGE.exists():shutil.rmtree(STAGE)
 PKG=STAGE/'kdash-candidate/package';APP=PKG/'app'
 for name in ['main.lua','VERSION','config','core','platform','ui','modules','services','assets']:
@@ -11,7 +16,7 @@ for name in ['main.lua','VERSION','config','core','platform','ui','modules','ser
  else:dst.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(src,dst)
 for name in ['luajit','fbink','libfreetype.so.6','libz.so.1','FreeType-FTL.txt','zlib-LICENSE.txt','THIRD_PARTY.md','FBInk-LICENSE','LuaJIT-COPYING']:
  dst=PKG/'runtime'/name;dst.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/'vendor'/name,dst)
-for name in ['kdash-launch.sh','session-common.sh','session-guard.sh','power-control.sh']:
+for name in ['kdash-launch.sh','session-common.sh','session-guard.sh','power-control.sh','power-monitor.sh','command-timeout.sh']:
  dst=PKG/'launcher'/name;dst.parent.mkdir(exist_ok=True);shutil.copyfile(ROOT/'launcher'/name,dst)
 shutil.copyfile(ROOT/'launcher/session-limit',PKG/'session-limit')
 shutil.copyfile(ROOT/'launcher/diagnose.sh',PKG/'diagnose.sh')
@@ -19,6 +24,7 @@ for src,name in [('library-entry.sh','Kindle Dashboard Candidate.sh'),('library-
  dst=STAGE/'documents'/name;dst.parent.mkdir(exist_ok=True);shutil.copyfile(ROOT/'launcher'/src,dst)
 shutil.copyfile(ROOT/'config/default.json',STAGE/'kdash-candidate/config.json')
 wallpaper=ROOT/'screensaver/wallpaper.ttf'
+(STAGE/'kdash-candidate/screensaver').mkdir(parents=True,exist_ok=True)
 if wallpaper.exists():
  dst=STAGE/'kdash-candidate/screensaver/wallpaper.ttf';dst.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(wallpaper,dst)
 wallpaper_raw=ROOT/'screensaver/wallpaper.y8'

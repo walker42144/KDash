@@ -117,9 +117,10 @@ end
 function util.path_exists(path)
     local f = io.open(path, "rb")
     if f then f:close() return true end
-    -- 目录无法用 io.open 打开，退化为 shell 检查
-    local ok = os.execute("test -e " .. util.shell_quote(path))
-    return ok == 0 or ok == true
+    -- On device access() covers directories without a fork for every HTTP poll.
+    local ffi=require('ffi')
+    if ffi.os=='Linux' then ffi.cdef[[int access(const char*,int);]];return ffi.C.access(path,0)==0 end
+    return false
 end
 
 -- UTF-8 与终端显示宽度：CJK 全角按 2 个单元计算。

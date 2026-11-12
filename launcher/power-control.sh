@@ -17,9 +17,9 @@ while [ ! -f "$RUN/stop.request" ]; do
    rm -f "$RUN/power-command.pid"
    read newest ignored < "$RUN/power.desired"
    if [ "$result" -eq 0 ] && [ "$newest" = "$seq" ] && [ ! -f "$RUN/stop.request" ]; then
-    state=$(tr -cd '[:alnum:]' < "$RUN/power.state")
+    state=$(tr -cd '[:alnum:]' < "$RUN/power.state" | tr '[:upper:]' '[:lower:]')
     log "power_state observed=$state target=$target"
-    case "$target:$state" in sleep:active|wake:screenSaver)
+    case "$target:$state" in sleep:active|wake:screensaver)
      lipc-set-prop -i com.lab126.powerd powerButton 1 >/dev/null 2>&1 &
      child=$!;record_pid "$RUN/power-command.pid" "$child"
      wait "$child"; log "power_state request=$target result=$?"

@@ -22,7 +22,8 @@ return function(T)
  end
  T.test('completion waits for acknowledgement, serializes duplicate taps and accepts empty success body',function()
   local api,calls,waiting=fixture({{method='GET',path='/project/p/data',data={tasks={{id='child',parentId='parent',status=0}}}},
-   {method='POST',path='/project/p/task/child/complete',defer=true}})
+   {method='POST',path='/project/p/task/child/complete',defer=true},
+   {method='GET',path='/project/p/task/child',data={id='child',status=2}}})
   local result=nil
   api:complete({project_id='p',task_id='child'},function(ok) result=ok end)
   T.eq(result,nil);T.eq(#calls,2)
@@ -39,8 +40,9 @@ return function(T)
  end)
  T.test('parent completes only after all children are already complete',function()
   local ok,err,calls=run({{method='GET',path='/data',data={tasks={{id='parent',items={{id='i',status=1}}},{id='child',parentId='parent',status=2}}}},
-   {method='POST',path='/project/p/task/parent/complete'}})
-  T.truthy(ok);T.eq(#calls,2)
+   {method='POST',path='/project/p/task/parent/complete'},
+   {method='GET',path='/project/p/task/parent',data={id='parent',status=2}}})
+  T.truthy(ok);T.eq(#calls,3)
  end)
  T.test('checklist completion patches freshest item list and preserves siblings and fields',function()
   local fresh={id='parent',projectId='p',title='keep',etag='v2',items={{id='a',title='first',status=0,sortOrder=1},{id='b',title='new phone edit',status=0,extra='keep'}}}
@@ -90,13 +92,15 @@ return function(T)
  T.test('omitted completed child is checked individually before parent completion',function()
   local ok,err,calls=run({{method='GET',path='/data',data={tasks={{id='parent',childIds={'child'}}}}},
    {method='GET',path='/task/child',data={id='child',status=2}},
-   {method='POST',path='/project/p/task/parent/complete'}})
-  T.truthy(ok);T.eq(#calls,3)
+   {method='POST',path='/project/p/task/parent/complete'},
+   {method='GET',path='/project/p/task/parent',data={id='parent',status=2}}})
+  T.truthy(ok);T.eq(#calls,4)
  end)
 
  T.test('null recurrence fields do not block normal undated task completion',function()
   local ok,err=run({{method='GET',path='/data',data={tasks={{id='parent',repeatFlag=json.null,dueDate=json.null}}}},
-   {method='POST',path='/complete'}})
+   {method='POST',path='/complete'},
+   {method='GET',path='/project/p/task/parent',data={id='parent',status=2}}})
   T.truthy(ok)
  end)
 

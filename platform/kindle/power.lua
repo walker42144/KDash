@@ -47,8 +47,8 @@ function Power:read_button()
     local ffi=self.button_ffi;local b=ffi.new("unsigned char[16]");local records={}
     for _=1,64 do
         local got=tonumber(ffi.C.read(self.button_fd,b,16))
-        if got<0 and ffi.errno()==11 then break end
-        if got~=16 then error("power button disconnected or short read") end
+        if got<0 and (ffi.errno()==11 or ffi.errno()==4) then break end
+        if got~=16 then self.button_down=nil;error("power button disconnected or short read") end
         records[#records+1]=require("platform.kindle.touch").decode_event(ffi.string(b,16))
     end
     return self:feed_button(records)
@@ -56,15 +56,21 @@ end
 
 -- The launcher owns the LIPC subscriber and its PID; Lua only consumes complete lines.
 function Power:poll_events()
-    if not self.events_path then return {} end
-    local f=io.open(self.events_path,"rb")
-    if not f then error("power event stream unavailable") end
-    local size=f:seek("end")
-    if size<self.event_offset then f:close();error("power event stream truncated") end
-    f:seek("set",self.event_offset)
     local out=self:read_button()
     local physical=#out>0
     if physical then self.ignore_native_until=os.time()+3 end
+    if not self.events_path then return out end
+    local f=io.open(self.events_path,"rb")
+    if not f then
+        self.stream_failures=(self.stream_failures or 0)+1
+        if self.log and self.stream_failures==1 then self.log:warn("power event stream temporarily unavailable") end
+        if self.stream_failures>=15 then error("power event stream unavailable repeatedly") end
+        return out
+    end
+    self.stream_failures=0
+    local size=f:seek("end")
+    if size<self.event_offset then self.event_offset=0 end
+    f:seek("set",self.event_offset)
     for _=1,256 do
         local start=f:seek();local line=f:read("*l")
         if not line then break end
@@ -78,7 +84,7 @@ function Power:poll_events()
                 if line:find(name,1,true) then self.log:info("power_event "..name) end
             end
         end
-        if not self.button_fd and os.time()>=(self.ignore_native_until or 0) then
+        if not physical and os.time()>=(self.ignore_native_until or 0) then
             if line:find("goingToScreenSaver",1,true) then out[#out+1]="sleep"
             elseif line:find("outOfScreenSaver",1,true) then out[#out+1]="wake" end
         end

@@ -19,6 +19,7 @@ class GuardHandshake(unittest.TestCase):
             run = Path(tmp)
             script = '''RUN="$1"; MODE="$2"
 log() { :; }
+trace_startup() { :; }
 alive() { [ "$MODE" != dead ]; }
 sleep() {
  echo "$1" >> "$RUN/sleeps"

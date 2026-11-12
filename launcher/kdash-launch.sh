@@ -78,7 +78,12 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'RC=143; exit 143' INT HUP TERM
-log "session_begin version=0.1.1-candidate1 revision=r18-startup-wait lock_wait_ticks=$attempt run=$RUN"
+log "session_begin version=0.1.1-candidate1 revision=r19-startup-diagnostic lock_wait_ticks=$attempt run=$RUN"
+# Temporary timing evidence: monotonic clock and shell builtins only.
+trace_startup() {
+ read trace_uptime trace_idle < /proc/uptime || trace_uptime=unknown
+ printf '[DEBUG-startup] uptime=%s stage=%s\n' "$trace_uptime" "$1" >> "$LOG"
+}
 rotate_log "$DATA/logs/bootstrap.log"
 # Only completed, inactive, non-symlink sessions with an exact owned basename
 # are reclaimed. Failed recovery snapshots are deliberately retained.
@@ -105,10 +110,12 @@ case "$firmware" in 'Kindle 5.16.2.1.1 '*) ;; *) log 'unreviewed firmware; abort
 log 'preflight_display_ok'
 "$RUN/luajit" "$PKG/app/main.lua" --probe-native-display >> "$LOG" 2>&1 || exit 2
 log 'preflight_native_ok'
+trace_startup preflight_complete
 for p in $(pidof cvm); do
     [ "$(awk '{print $3}' /proc/$p/stat)" != T ] || { log 'cvm is paused by another app'; exit 3; }
 done
 pidof cvm >/dev/null 2>&1 || { log 'stock framework absent'; exit 3; }
+trace_startup framework_checked
 # Record the exact stock UI processes, matching the on-device warm UI evidence.
 # Keep init jobs alive: do not stop/restart lab126_gui.
 : > "$RUN/ui.pids"
@@ -119,9 +126,11 @@ for name in Xorg awesome blanket pillowd cvm KPPMainApp mesquite; do
         echo "$ui_pid $(pid_stamp "$ui_pid") $name" >> "$RUN/ui.pids"
     done
 done
+trace_startup ui_inventory_complete
 saved=$(bounded lipc-get-prop -i com.lab126.powerd preventScreenSaver 2>/dev/null) || exit 2
 case "$saved" in ''|*[!0-9]*) log 'invalid screensaver value'; exit 2;; esac
 echo "$saved" > "$RUN/screensaver.before"
+trace_startup screensaver_queried
 limit=$(cat "$PKG/session-limit" 2>/dev/null)
 case "$limit" in 0|180) ;; *) log 'session-limit must be 180 (trial) or 0 (accepted)'; exit 2;; esac
 echo "$limit" > "$RUN/limit"
@@ -137,6 +146,7 @@ while [ ! -f "$RUN/guard.ready" ] && [ "$i" -lt 50 ]; do
 done
 [ -f "$RUN/guard.ready" ] || { log 'watchdog handshake failed'; exit 2; }
 alive "$RUN/guard.pid" || { log 'watchdog exited after handshake'; exit 2; }
+trace_startup guard_ready
 [ ! -f "$RUN/stop.request" ] || exit 2
 : > "$RUN/ui.intent"
 log 'ui_pause_begin (framework services retained)'
@@ -171,8 +181,10 @@ done
 dd if=/dev/fb0 of="$RUN/stock.fb" bs=4096 count=1632 2>> "$LOG" || exit 4
 [ "$(wc -c < "$RUN/stock.fb")" -eq 6684672 ] || exit 4
 log 'ui_paused stock_frame_saved' 
+trace_startup ui_snapshot_complete
 [ ! -f "$RUN/stop.request" ] || exit 2
 bounded lipc-set-prop -i com.lab126.powerd preventScreenSaver 1 >> "$LOG" 2>&1 || exit 4
+trace_startup screensaver_disabled
 # Subscribe before app start. Failure triggers the existing exact-PID recovery path.
 : > "$RUN/power.events"
 /bin/sh "$RUN/power-monitor.sh" "$RUN" &
@@ -180,6 +192,7 @@ monitor=$!; record_pid "$RUN/power-monitor.pid" "$monitor"
 : > "$RUN/power-monitor.ready"
 sleep 1
 alive "$RUN/power-monitor.pid" || { cat "$RUN/power.stderr" >> "$LOG"; log 'power subscription failed'; exit 4; }
+trace_startup power_monitor_ready
 /bin/sh "$RUN/power-control.sh" "$RUN" >> "$LOG" 2>&1 &
 controller=$!;record_pid "$RUN/power-control.pid" "$controller"
 : > "$RUN/power-control.ready"

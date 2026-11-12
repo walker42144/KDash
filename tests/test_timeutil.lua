@@ -1,0 +1,58 @@
+return function(T)
+    local timeutil = require("core.timeutil")
+
+    T.test("civil date roundtrip", function()
+        local days = timeutil.days_from_civil(2026, 11, 11)
+        local y, m, d = timeutil.civil_from_days(days)
+        T.eq(y, 2026)
+        T.eq(m, 11)
+        T.eq(d, 11)
+    end)
+
+    T.test("parse ISO8601 with offsets", function()
+        local a = timeutil.parse_iso8601("2026-11-11T12:00:00+0800")
+        local b = timeutil.parse_iso8601("2026-11-11T04:00:00Z")
+        T.eq(a, b)
+        local c = timeutil.parse_iso8601("2026-11-10T23:00:00-0500")
+        T.eq(c, b)
+        local d = timeutil.parse_iso8601("2026-11-11T12:00:00.000+0800")
+        T.eq(d, a)
+        T.eq(timeutil.date_key(a, 480), "2026-11-11")
+    end)
+
+    T.test("calendar-day countdown", function()
+        local event = { date = "2026-12-19" }
+        local now = timeutil.parse_iso8601("2026-11-11T12:00:00+0800")
+        local days, hours, minutes, expired = timeutil.countdown(event, now, 480)
+        T.eq(days, 38)
+        T.eq(hours, 0)
+        T.eq(minutes, 0)
+        T.eq(expired, false)
+    end)
+
+    T.test("expired date countdown", function()
+        local event = { date = "2026-11-01" }
+        local now = timeutil.parse_iso8601("2026-11-11T12:00:00+0800")
+        local days, _, _, expired = timeutil.countdown(event, now, 480)
+        T.eq(days, 10)
+        T.eq(expired, true)
+    end)
+
+    T.test("timed countdown", function()
+        local event = { date = "2026-11-11", time = "14:30" }
+        local now = timeutil.parse_iso8601("2026-11-11T12:00:00+0800")
+        local days, hours, minutes, expired = timeutil.countdown(event, now, 480)
+        T.eq(days, 0)
+        T.eq(hours, 2)
+        T.eq(minutes, 30)
+        T.eq(expired, false)
+    end)
+
+    T.test("weekday and date labels", function()
+        local ts = timeutil.parse_iso8601("2026-11-11T12:00:00+0800")
+        T.eq(timeutil.weekday(ts, 480, "en", true), "WED")
+        T.eq(timeutil.weekday(ts, 480, "zh"), "星期三")
+        T.eq(timeutil.date_label(ts, 480, "en"), "NOV 11")
+        T.eq(timeutil.format_time(ts, 480, true), "12:00")
+    end)
+end

@@ -1,0 +1,12 @@
+{
+  "id": "weather",
+  "name": "Weather",
+  "display_title": "WEATHER",
+  "version": "1.0.0",
+  "api_version": 1,
+  "order": 40,
+  "enabled": true,
+  "permissions": ["network"],
+  "refresh": { "interval": 2700, "max_backoff": 7200 },
+  "layout": { "min_height": 190, "show_title": true }
+}

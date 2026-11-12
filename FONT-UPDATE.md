@@ -1,0 +1,1 @@
+Noto Sans SC Medium: unmodified official notofonts/noto-cjk font, SIL OFL 1.1; see assets/fonts/NotoSansSC-LICENSE.txt. Source: https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/SubsetOTF/SC/NotoSansSC-Medium.otf

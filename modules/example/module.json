@@ -1,0 +1,12 @@
+{
+  "id": "example",
+  "name": "Example",
+  "display_title": "EXAMPLE MODULE",
+  "version": "1.0.0",
+  "api_version": 1,
+  "order": 90,
+  "enabled": true,
+  "permissions": [],
+  "refresh": { "interval": 60 },
+  "layout": { "min_height": 100, "show_title": true }
+}

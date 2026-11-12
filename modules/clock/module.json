@@ -1,0 +1,12 @@
+{
+  "id": "clock",
+  "name": "Clock",
+  "display_title": "TIME",
+  "version": "1.0.0",
+  "api_version": 1,
+  "order": 10,
+  "enabled": true,
+  "permissions": [],
+  "refresh": { "interval": 30, "align": "minute" },
+  "layout": { "min_height": 240, "show_title": false }
+}

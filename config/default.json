@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "language": "zh",
+  "utc_offset_minutes": 480,
+  "last_page": "home",
+  "ui": {
+    "ink_mode": false,
+    "margin": 56,
+    "font_scale": 1.0,
+    "font": "",
+    "direct_exit": true,
+    "minimal": true,
+    "hide_settings": true,
+    "refresh_minutes": 1,
+    "auto_update": true,
+    "refresh_alignment": "first_10min"
+  },
+  "power": {
+    "keep_awake": "always",
+    "full_refresh_every": 24
+  },
+  "network": {
+    "sync_interval_minutes": 15,
+    "insecure_tls": false
+  },
+  "modules": {
+    "clock": {
+      "enabled": true,
+      "format": "24h",
+      "show_seconds": false
+    },
+    "countdown": {
+      "enabled": true,
+      "events": [
+        {
+          "id": "exam",
+          "name": "示例事件",
+          "name_en": "Postgraduate Exam",
+          "date": "2030-01-01",
+          "time": "",
+          "pinned": true
+        }
+      ]
+    },
+    "dida": {
+      "enabled": false,
+      "project_ids": [],
+      "upcoming_days": 7,
+      "sync_interval_minutes": 15,
+      "auth_url_hint": "http://127.0.0.1:8080/callback",
+      "allow_complete": true,
+      "date_filter": "today"
+    },
+    "weather": {
+      "enabled": false,
+      "city": "",
+      "city_en": "",
+      "latitude": 39.9042,
+      "longitude": 116.4074,
+      "timezone": "Asia/Shanghai",
+      "sync_interval_minutes": 45,
+      "forecast_days": 3,
+      "provider": "amap",
+      "adcode": "",
+      "solar_location": {
+        "latitude": 34.2,
+        "longitude": 118.8
+      }
+    },
+    "device": {
+      "enabled": false,
+      "refresh_minutes": 5
+    },
+    "notes": {
+      "enabled": false,
+      "title": "NOTES",
+      "file": "",
+      "quotes": [],
+      "text": ""
+    },
+    "example": {
+      "enabled": false,
+      "message": "这是一个独立模块。新增功能不需要修改核心代码。"
+    }
+  },
+  "pages": [
+    {
+      "id": "home",
+      "title": "KDASH",
+      "kind": "dashboard",
+      "overview": true,
+      "layout": [
+        {
+          "modules": [
+            "clock",
+            "countdown"
+          ],
+          "weight": 30
+        },
+        {
+          "modules": [
+            "dida"
+          ],
+          "weight": 42
+        },
+        {
+          "modules": [
+            "weather"
+          ],
+          "weight": 28
+        }
+      ]
+    }
+  ],
+  "input": {
+    "swap_xy": false,
+    "invert_x": false,
+    "invert_y": false
+  },
+  "timezone": "Asia/Shanghai"
+}

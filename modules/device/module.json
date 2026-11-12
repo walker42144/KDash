@@ -1,0 +1,12 @@
+{
+  "id": "device",
+  "name": "Device Status",
+  "display_title": "DEVICE",
+  "version": "1.0.0",
+  "api_version": 1,
+  "order": 50,
+  "enabled": true,
+  "permissions": ["device"],
+  "refresh": { "interval": 300 },
+  "layout": { "min_height": 110, "show_title": true }
+}

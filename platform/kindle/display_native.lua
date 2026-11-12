@@ -28,6 +28,8 @@ function D:line(x0,y0,x1,y1,c,w,dash)
  self.canvas:line(x0,y0,x1,y1,c,w,dash);self:add_dirty(math.min(x0,x1)-4,math.min(y0,y1)-4,math.abs(x1-x0)+8,math.abs(y1-y0)+8)
 end
 function D:circle(x,y,r,c,filled,w) self.canvas:circle(x,y,r,c,filled,w);self:add_dirty(x-r-4,y-r-4,r*2+8,r*2+8) end
+function D:rounded_box(r,radius,color) self.canvas:rounded_box(r,radius,color);self:add_dirty(r.x,r.y,r.w,r.h) end
+function D:chevron(r,up,color) self.canvas:chevron(r,up,color);self:add_dirty(r.x,r.y,r.w,r.h) end
 function D:prepare_screensaver(dir)
  local f=assert(io.open(dir..'/screensaver/wallpaper.y8','rb'),'wallpaper.y8 missing')
  local raw=f:read('*a');f:close();assert(#raw==self.width*self.height,'invalid wallpaper dimensions');self.wallpaper=raw

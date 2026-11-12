@@ -173,7 +173,7 @@ function M.render(ctx,ui,rect,opts)
  for _,b in ipairs({{label='上',delta=-1,x=x,enabled=state.page>1},{label='下',delta=1,x=x+180,enabled=state.page<pages}}) do
   local box={x=b.x,y=sy,w=70,h=40};local color=b.enabled and t.colors.ink or t.colors.faint
   ui:rounded_box(box,6,color)
-  ui:text({text=b.label,x=box.x,y=box.y,w=box.w,h=box.h,size=24,align='center',valign='center',color=color})
+  ui:page_chevron(box,b.delta<0,color)
   ui:hit(box,b.enabled and 'module_action' or 'noop',b.enabled and {module='dida',kind='page',delta=b.delta} or nil,'task-page')
  end
  ui:text({text=state.page..'/'..pages,x=x+70,y=sy+7,w=110,size=micro,align='center'})

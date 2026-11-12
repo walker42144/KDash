@@ -23,6 +23,61 @@ function C:circle(x,y,r,color,filled,width)
   local n=math.max(24,math.ceil(r*8));for i=0,n do local a=i*math.pi*2/n;self:fill({x=x+math.cos(a)*r-(width or 2)/2,y=y+math.sin(a)*r-(width or 2)/2,w=width or 2,h=width or 2},color) end
  end
 end
+-- Supersampled masks are small, color-independent and shared across frames.
+local mask_cache={};local mask_bytes,mask_count=0,0
+local function mask(key,w,h,inside)
+ local found=mask_cache[key];if found then return found end
+ local rows={}
+ for y=0,h-1 do
+  local row={}
+  for x=0,w-1 do
+   local coverage=0
+   for sy=0,3 do for sx=0,3 do if inside(x+(sx+.5)/4,y+(sy+.5)/4) then coverage=coverage+1 end end end
+   row[#row+1]=string.char(math.floor(coverage*255/16+.5))
+  end
+  rows[#rows+1]=table.concat(row)
+ end
+ local result=table.concat(rows)
+ if mask_count>=64 or mask_bytes+#result>256*1024 then mask_cache={};mask_count=0;mask_bytes=0 end
+ if #result<=256*1024 then mask_cache[key]=result;mask_bytes=mask_bytes+#result;mask_count=mask_count+1 end
+ return result
+end
+function C:blend_mask(raw,x,y,w,h,color)
+ local fg=colors[color or 'ink'] or tonumber(color) or 0;x,y=math.floor(x+.5),math.floor(y+.5)
+ for yy=0,h-1 do local dy=y+yy;if dy>=0 and dy<self.height then
+  for xx=0,w-1 do local dx=x+xx;if dx>=0 and dx<self.width then
+   local alpha=raw:byte(yy*w+xx+1)
+   if alpha>0 then local pos=dy*self.width+dx;self.buf[pos]=math.floor((fg*alpha+tonumber(self.buf[pos])*(255-alpha)+127)/255) end
+  end end
+ end end
+end
+function C:rounded_box(r,radius,color,stroke)
+ local w,h=math.floor(r.w+.5),math.floor(r.h+.5);if w<=0 or h<=0 then return end
+ assert(w<=2048 and h<=256,'rounded mask exceeds UI bounds')
+ radius=math.max(0,math.min(radius,w/2,h/2));stroke=stroke or 2
+ local key=table.concat({'round',w,h,radius,stroke},':')
+ local raw=mask(key,w,h,function(px,py)
+  local qx,qy=math.abs(px-w/2)-(w/2-radius),math.abs(py-h/2)-(h/2-radius)
+  local ax,ay=math.max(qx,0),math.max(qy,0)
+  local distance=math.sqrt(ax*ax+ay*ay)+math.min(math.max(qx,qy),0)-radius
+  return distance<=0 and distance>=-stroke
+ end)
+ self:blend_mask(raw,r.x,r.y,w,h,color)
+end
+function C:chevron(r,up,color)
+ local w,h=24,14
+ local function distance(x,y,ax,ay,bx,by)
+  local vx,vy=bx-ax,by-ay;local t=math.max(0,math.min(1,((x-ax)*vx+(y-ay)*vy)/(vx*vx+vy*vy)))
+  return (x-ax-t*vx)^2+(y-ay-t*vy)^2
+ end
+ local raw=mask('chevron:'..tostring(up),w,h,function(x,y)
+  if not up then y=h-y end
+  return math.min(distance(x,y,2,11,12,3),distance(x,y,12,3,22,11))<=1.25^2
+ end)
+ self:blend_mask(raw,r.x+(r.w-w)/2,r.y+(r.h-h)/2,w,h,color)
+end
+function C.mask_cache_stats() return {bytes=mask_bytes,count=mask_count} end
+
 function C:text(o)
  local size=math.floor(o.size or 32);local w=self.font:measure(o.text or '',size,o.font)
  local x=o.x or 0;local y=o.y or 0

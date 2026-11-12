@@ -77,6 +77,9 @@ end
 function HostDisplay:circle(x,y,r,c,filled,w)
  self.ops[#self.ops+1]={kind="circle",x=x,y=y,r=r,color=c,filled=filled,width=w or 2}
 end
+function HostDisplay:rounded_box(r,radius,c)
+ self.ops[#self.ops+1]={kind='rounded_box',x=r.x,y=r.y,w=r.w,h=r.h,radius=radius,color=c}
+end
 function HostDisplay:flush()
     local out = {}
     out[#out + 1] = string.format(
@@ -89,6 +92,8 @@ function HostDisplay:flush()
             out[#out + 1] = string.format(
                 '<rect x="%d" y="%d" width="%d" height="%d" fill="%s"/>',
                 math.floor(r.x), math.floor(r.y), math.floor(r.w), math.floor(r.h), color(op.color))
+        elseif op.kind == "rounded_box" then
+            out[#out+1]=string.format('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="%.1f" fill="none" stroke="%s" stroke-width="2"/>',op.x+1,op.y+1,op.w-2,op.h-2,math.max(0,op.radius-1),color(op.color))
         elseif op.kind == "line" then
             out[#out+1]=string.format('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="%.1f" %s/>',op.x0,op.y0,op.x1,op.y1,color(op.color),op.width,op.dash and 'stroke-dasharray="8 8"' or '')
         elseif op.kind == "circle" then

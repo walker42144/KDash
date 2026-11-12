@@ -10,6 +10,7 @@ local files = {
     "test_r12",
     "test_r13",
     "test_r14",
+    "test_r15",
     "test_geometry",
     "test_device",
     "test_amap",

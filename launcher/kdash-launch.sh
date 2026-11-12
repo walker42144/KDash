@@ -72,7 +72,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'RC=143; exit 143' INT HUP TERM
-log "session_begin version=0.1.1-candidate1 revision=r14-task-badges-runtime run=$RUN"
+log "session_begin version=0.1.1-candidate1 revision=r15-smooth-badges-arrows run=$RUN"
 # All compatibility checks happen before stopping the GUI.
 for cmd in setsid pidof lipc-get-prop lipc-set-prop lipc-wait-event awk; do command -v "$cmd" >/dev/null 2>&1 || { log "missing $cmd"; exit 2; }; done
 cp "$PKG/runtime/luajit" "$RUN/luajit" && cp "$PKG/runtime/fbink" "$RUN/fbink" || exit 2

@@ -178,6 +178,7 @@ end
 
 -- Bounds shared by pagination and rendering. The caller already reserves priority.
 function UI:rounded_box(r,radius,color)
+ if self.display.rounded_box then self.display:rounded_box(r,radius,color or self.theme.colors.ink);return end
  if not self.display.line then self:box(r,false,color);return end
  local d=self.display;local x,y,w,h=r.x,r.y,r.w,r.h;local rr=math.min(radius,w/2,h/2);local c=color or self.theme.colors.ink
  d:hline(x+rr,y,w-2*rr,2,c);d:hline(x+rr,y+h-2,w-2*rr,2,c)
@@ -187,6 +188,14 @@ function UI:rounded_box(r,radius,color)
   for i=0,8 do local a=(corner[3]+i*90/8)*math.pi/180;local px,py=corner[1]+rr*math.cos(a),corner[2]+rr*math.sin(a)
    if last then d:line(last[1],last[2],px,py,c,1.5) end;last={px,py}
   end
+ end
+end
+function UI:page_chevron(r,up,color)
+ if self.display.chevron then self.display:chevron(r,up,color);return end
+ if self.display.line then
+  local x,y=r.x+r.w/2,r.y+r.h/2;local sign=up and 1 or -1
+  self.display:line(x-10,y+sign*4,x,y-sign*4,color,2.5)
+  self.display:line(x,y-sign*4,x+10,y+sign*4,color,2.5)
  end
 end
 function UI:task_layout(rect,title,meta,opts)
@@ -215,7 +224,7 @@ function UI:task_with_badges(rect,title,meta,checked,opts)
  self:text({text=layout.title,x=rect.x+layout.left,y=rect.y+(first-layout.size)/2,w=layout.title_w,size=layout.size})
  for _,b in ipairs(layout.badges) do
   local box={x=rect.x+b.x,y=rect.y+b.y+5,w=b.w,h=34}
-  self:rounded_box(box,b.kind=='tag' and 16 or 6,self.theme.colors.ink)
+  self:rounded_box(box,b.kind=='tag' and 17 or 7,self.theme.colors.ink)
   self:text({text=b.text,x=box.x,y=box.y,w=box.w,h=box.h,size=b.size,align='center',valign='center'})
  end
  if meta and meta~='' then self:text({text=meta,x=rect.x,y=rect.y+(first-self.theme.type.micro)/2,w=rect.w,size=self.theme.type.micro,align='right'}) end

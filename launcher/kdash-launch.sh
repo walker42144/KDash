@@ -78,7 +78,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'RC=143; exit 143' INT HUP TERM
-log "session_begin version=0.1.1-candidate1 revision=r17-startup-wake lock_wait_ticks=$attempt run=$RUN"
+log "session_begin version=0.1.1-candidate1 revision=r18-startup-wait lock_wait_ticks=$attempt run=$RUN"
 rotate_log "$DATA/logs/bootstrap.log"
 # Only completed, inactive, non-symlink sessions with an exact owned basename
 # are reclaimed. Failed recovery snapshots are deliberately retained.
@@ -127,8 +127,16 @@ case "$limit" in 0|180) ;; *) log 'session-limit must be 180 (trial) or 0 (accep
 echo "$limit" > "$RUN/limit"
 setsid /bin/sh "$RUN/session-guard.sh" "$RUN" </dev/null >> "$LOG" 2>&1 &
 record_pid "$RUN/guard.pid" $!
-i=0; while [ ! -f "$RUN/guard.ready" ] && [ "$i" -lt 5 ]; do sleep 1; i=$((i+1)); done
+i=0; short_sleep=1
+while [ ! -f "$RUN/guard.ready" ] && [ "$i" -lt 50 ]; do
+ if [ "$short_sleep" = 1 ];then
+  if sleep 0.1 2>/dev/null;then i=$((i+1));continue;fi
+  short_sleep=0
+ fi
+ sleep 1; i=$((i+10))
+done
 [ -f "$RUN/guard.ready" ] || { log 'watchdog handshake failed'; exit 2; }
+alive "$RUN/guard.pid" || { log 'watchdog exited after handshake'; exit 2; }
 [ ! -f "$RUN/stop.request" ] || exit 2
 : > "$RUN/ui.intent"
 log 'ui_pause_begin (framework services retained)'
@@ -136,11 +144,26 @@ while read ui_pid stamp name; do
     [ "$(pid_stamp "$ui_pid")" = "$stamp" ] || { log "UI process changed: $name"; exit 4; }
     kill -STOP "$ui_pid" 2>/dev/null || { log "UI pause failed: $name"; exit 4; }
 done < "$RUN/ui.pids"
-sleep 1
-while read ui_pid stamp name; do
-    state=$(awk '{print $3}' "/proc/$ui_pid/stat")
-    [ "$(pid_stamp "$ui_pid")" = "$stamp" ] && [ "$state" = T ] || { log "UI pause unverified: $name state=$state"; exit 4; }
-done < "$RUN/ui.pids"
+verify_ui_paused() {
+ while read ui_pid stamp name; do
+  [ "$(pid_stamp "$ui_pid")" = "$stamp" ] || { log "UI identity changed: $name"; return 2; }
+  state=$(awk '{print $3}' "/proc/$ui_pid/stat")
+  case "$state" in T|t) ;; *) return 1;; esac
+ done < "$RUN/ui.pids"
+ return 0
+}
+i=0
+while :; do
+ verify_ui_paused; status=$?
+ [ "$status" -eq 0 ] && break
+ [ "$status" -eq 2 ] && exit 4
+ [ "$i" -lt 50 ] || { log 'UI pause unverified: timeout'; exit 4; }
+ if [ "$short_sleep" = 1 ];then
+  if sleep 0.1 2>/dev/null;then i=$((i+1));continue;fi
+  short_sleep=0
+ fi
+ sleep 1; i=$((i+10))
+done
 # Snapshot the reviewed KPW3 virtual Y8 framebuffer after all stock painters stop.
 # 1088 byte stride * 6144 virtual rows; never restore while a KDash painter is alive.
 [ "$(cat /sys/class/graphics/fb0/stride)" = 1088 ] || exit 4

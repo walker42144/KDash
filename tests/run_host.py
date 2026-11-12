@@ -9,7 +9,7 @@ def run(command):
  print('RUN',*command,flush=True);subprocess.run(command,cwd=ROOT,env=env,check=True,timeout=240)
 run(['luajit','tests/run.lua'])
 run([sys.executable,'-m','unittest','discover','-s','pc_tool','-p','test*.py'])
-for name in ['test_startup.py','test_recovery.py','test_power_control.py','test_power_latency.py','test_review_shell.py','test_http_scripts.py']:
+for name in ['test_startup.py','test_guard_start_latency.py','test_pause_start_latency.py','test_recovery.py','test_power_control.py','test_power_latency.py','test_review_shell.py','test_http_scripts.py']:
  run([sys.executable,'tests/'+name])
 if env.get('KDASH_TEST_FREETYPE'):
  run(['luajit','tests/test_native_canvas.lua','.'])

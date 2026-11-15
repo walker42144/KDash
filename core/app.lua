@@ -484,6 +484,25 @@ function App:handle_power_event(event)
     end
 end
 
+-- Contain an unexpected network bookkeeping error without taking down touch,
+-- power handling or the rest of the dashboard. Never blindly retry a write.
+function App:poll_http_safely(now)
+    if self.http_disabled or (self.http_retry_after and now<self.http_retry_after) then return end
+    local allow_retries=not self.sleeping and (not self.updates_paused or self.manual_batch~=nil)
+    local ok=pcall(self.http.poll,self.http,allow_retries)
+    if ok then self.http_poll_failures=0;self.http_retry_after=nil;return end
+    local n=(self.http_poll_failures or 0)+1;self.http_poll_failures=n
+    if self.log then self.log:warn('network processing error; cancelling outstanding requests') end
+    local cancelled=pcall(self.http.cancel_all,self.http)
+    if not cancelled then
+        self.http_disabled=true
+        if self.log then self.log:error('network cleanup failed; network disabled until restart') end
+        return
+    end
+    self.http.closed=false
+    self.http_retry_after=now+(n==1 and 5 or n==2 and 10 or 60)
+end
+
 function App:run()
     if not self:setup() then return 1 end
     if self.page then
@@ -512,7 +531,7 @@ function App:run()
         end
         self:maybe_calibrate(now)
         self:refresh_due(now)
-        self.http:poll()
+        self:poll_http_safely(now)
         self:check_manual_batch(now)
         self:check_async(now)
         self:maybe_power(now)

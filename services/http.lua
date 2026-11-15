@@ -13,6 +13,7 @@ function Http.new(opts)
     self.now = opts.now or os.time
     self.seq = 0
     self.jobs = {}
+    self.retries = {}
     self.curl = opts.curl or "curl"
     self.cacert = opts.cacert
     self.insecure = opts.insecure == true
@@ -76,9 +77,9 @@ function Http:build_script(opts, paths)
     return script
 end
 
-function Http:request(opts, cb)
+function Http:request(opts, cb, retry_attempt)
     if self.closed then cb({ok=false,error="cancelled",status=0,body=""});return nil end
-    local count=0;for _ in pairs(self.jobs) do count=count+1 end
+    local count=#self.retries;for _ in pairs(self.jobs) do count=count+1 end
     if count>=4 then cb({ok=false,error="request queue full",status=0,body=""});return nil end
     self.seq = self.seq + 1
     local id = tostring(self.now()) .. "-" .. tostring(self.seq)
@@ -111,6 +112,9 @@ function Http:request(opts, cb)
         max_bytes = opts.max_bytes or 4*1024*1024,
         label = opts.label or "HTTP request",
         sensitive_values = opts.sensitive_values or {},
+        method = (opts.method or "GET"):upper(),
+        retry_attempt = retry_attempt or 0,
+        retry_opts = opts,
     }
     self.jobs[id] = job
     if self.log then self.log:debug("http start: " .. job.label) end
@@ -155,6 +159,15 @@ function Http:_finish(job, result)
     for name,p in pairs(paths) do
         if not unfinished or (name~='pid' and name~='worker' and name~='cancel') then self.storage:remove(p) end
     end
+    -- Only retry safe reads on explicitly transient transport/status failures.
+    -- A write may have succeeded remotely even if its response was lost.
+    if result.retryable and job.method == 'GET' and job.retry_attempt < 2 and not self.closed then
+        local attempt=job.retry_attempt+1
+        self.retries[#self.retries+1]={opts=job.retry_opts,cb=job.cb,attempt=attempt,due=self.now()+(attempt==1 and 5 or 10)}
+        if self.log then self.log:warn('http transient failure; retry scheduled ('..attempt..'/2)') end
+        return
+    end
+    result.retryable=nil
     if self.log then
         if result.ok then
             self.log:debug("http done: " .. job.label .. " " .. tostring(result.status))
@@ -166,41 +179,62 @@ function Http:_finish(job, result)
     if not ok and self.log then self.log:error("http callback error: " .. tostring(err)) end
 end
 
-function Http:poll()
+function Http:poll(allow_retries)
     local now = self.now()
-    for id, job in pairs(self.jobs) do
+    -- Callbacks may add/remove jobs. Snapshot identities before invoking any
+    -- callback, and never process newly created jobs in the same pass.
+    local snapshot={}
+    for id,job in pairs(self.jobs) do snapshot[#snapshot+1]={id=id,job=job} end
+    for _,entry in ipairs(snapshot) do
+        local id,job=entry.id,entry.job
+        if self.jobs[id]==job then
         if self.storage:exists(job.paths.done) then
             local rc = read_number(self.storage, job.paths.rc) or -1
             local status = read_number(self.storage, job.paths.status) or 0
             local body,body_err = self.storage:read(job.paths.out,job.max_bytes)
             body=body or ""
             local stderr_text = (self.storage:read(job.paths.err,4096) or ""):sub(1,4096)
-            local oversized=body_err~=nil or #body>job.max_bytes
+            local oversized=body_err=='file exceeds size limit' or #body>job.max_bytes
+            local unreadable=body_err~=nil and not oversized
             if oversized then body="" end
-            local ok = (not oversized and rc == 0 and status >= 200 and status < 300)
+            local ok = (not oversized and not unreadable and rc == 0 and status >= 200 and status < 300)
             local error_message=nil
-            if not ok then error_message=oversized and "response exceeds size limit" or string.format("curl rc=%d http=%d %s",rc,status,util.trim(stderr_text)) end
+            if not ok then error_message=oversized and "response exceeds size limit" or unreadable and "response unavailable" or string.format("curl rc=%d http=%d %s",rc,status,util.trim(stderr_text)) end
             self:_finish(job, {
                 ok = ok,
                 status = status,
                 body = body,
                 error = error_message,
+                retryable = not oversized and not (status>=400 and status<500 and status~=408) and ((unreadable and rc==0 and status>=200 and status<300) or (rc==0 and (status==408 or status==500 or status==502 or status==503 or status==504)) or (rc==5 or rc==6 or rc==7 or rc==18 or rc==28 or rc==35 or rc==52 or rc==55 or rc==56)),
             })
         elseif now - job.started > job.timeout then
-            self:_finish(job, { ok = false, status = 0, body = "", error = "timeout" })
+            self:_finish(job, { ok = false, status = 0, body = "", error = "timeout", retryable = true })
         end
+        end
+    end
+    -- Copy and detach the queue before dispatch; callbacks may enqueue more.
+    local queued=self.retries;self.retries={}
+    for _,retry in ipairs(queued) do
+        if self.closed or allow_retries==false then
+            pcall(retry.cb,{ok=false,status=0,body='',error='cancelled'})
+        elseif retry.due<=now then
+            self:request(retry.opts,retry.cb,retry.attempt)
+        else self.retries[#self.retries+1]=retry end
     end
 end
 
 function Http:busy()
-    return next(self.jobs) ~= nil
+    return next(self.jobs) ~= nil or #self.retries>0
 end
 
 function Http:cancel_all()
     self.closed=true
-    for _, job in pairs(self.jobs) do
-        self:_finish(job, { ok = false, status = 0, body = "", error = "cancelled" })
+    local snapshot={};for _,job in pairs(self.jobs) do snapshot[#snapshot+1]=job end
+    local retries=self.retries;self.retries={}
+    for _,job in ipairs(snapshot) do
+        if self.jobs[job.id]==job then self:_finish(job, { ok = false, status = 0, body = "", error = "cancelled" }) end
     end
+    for _,retry in ipairs(retries) do pcall(retry.cb,{ok=false,status=0,body='',error='cancelled'}) end
 end
 
 return Http

@@ -29,6 +29,7 @@ local files = {
     "test_touch",
     "test_registry",
     "test_http",
+    "test_http_robust",
     "test_display",
     "test_app_boot",
 }

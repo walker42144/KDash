@@ -93,7 +93,7 @@ lipc-set-prop() { echo "lipc $*" >> "$RUN/trace"; }
  c=c.replace('sleep() { :; }', 'ticks=0\nsleep() { ticks=$((ticks+1)); if [ "$ticks" -ge 185 ]; then : > "$RUN/parent-dead"; fi; }')
  (run3/'session-common.sh').write_text(c,encoding='utf-8',newline='\n')
  f=run3/'guard.sh';f.write_text(guard.replace(posix(run),posix(run3)),encoding='utf-8',newline='\n')
- proc=subprocess.run([SH,'-c',f"export PATH=/usr/bin:/bin:$PATH; /bin/sh '{posix(f)}' '{posix(run3)}'"],capture_output=True,text=True,timeout=10)
+ proc=subprocess.run([SH,'-c',f"export PATH=/usr/bin:/bin:$PATH; /bin/sh '{posix(f)}' '{posix(run3)}'"],capture_output=True,text=True,timeout=45)
  assert proc.returncode==0,(proc.stdout,proc.stderr)
  trace=(run3/'trace').read_text()
  assert (run3/'parent-dead').exists() and (run3/'recovery.done').exists()

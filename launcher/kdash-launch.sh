@@ -78,7 +78,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'RC=143; exit 143' INT HUP TERM
-log "session_begin version=0.1.1-candidate1 revision=r19-splash-candidate lock_wait_ticks=$attempt run=$RUN"
+log "session_begin version=0.1.1-candidate1 revision=r20-network-safety lock_wait_ticks=$attempt run=$RUN"
 # Temporary timing evidence: monotonic clock and shell builtins only.
 trace_startup() {
  read trace_uptime trace_idle < /proc/uptime || trace_uptime=unknown

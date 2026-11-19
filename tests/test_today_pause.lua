@@ -3,6 +3,27 @@ return function(T)
  local function task(id,date,children)
   return {id=id,title=id,project_id='p',date_metadata=true,own_due_key=date,children=children or {},checklist={}}
  end
+ T.test('today timed tasks sort by displayed start time ahead of priority and all-day tasks',function()
+  local date='2026-11-11'
+  local early,late,all=task('early',date),task('late',date),task('all',date)
+  early.source_start=date..'T10:00:00+08:00'
+  early.source_due=date..'T11:00:00+08:00'
+  late.source_start=date..'T14:00:00+08:00'
+  late.source_due=date..'T15:00:00+08:00'
+  late.priority=5
+  all.is_all_day=true
+  all.source_start=date..'T00:00:00+08:00'
+  local result=Today.select({today={late,all,early}},date,480)
+  T.eq(result[1].id,'early');T.eq(result[2].id,'late');T.eq(result[3].id,'all')
+  local untimed=task('aaa',date)
+  local view={today={late,all,untimed,early}}
+  result=Today.select(view,date,480,'priority')
+  T.eq(result[1].id,'late');T.eq(result[2].id,'early')
+  T.eq(result[3].id,'all');T.eq(result[4].id,'aaa')
+  early.priority=5
+  result=Today.select(view,date,480,'priority')
+  T.eq(result[1].id,'early');T.eq(result[2].id,'late')
+ end)
  T.test('today filter excludes old future and undated roots regardless of cached bucket',function()
   local view={today={task('old','2026-11-10'),task('today','2026-11-11')},upcoming={task('future','2026-11-12')},undated={task('none')}}
   local selected=Today.select(view,'2026-11-11');T.eq(#selected,1);T.eq(selected[1].id,'today')

@@ -3,10 +3,10 @@ local DidaAPI=require('services.api.dida')
 local timeutil=require('core.timeutil')
 local util=require('core.util')
 local M={}
-local state={expanded={},page=1,saving=false,syncing=false,uncertain={}}
+local state={expanded={},sort_mode="time",page=1,saving=false,syncing=false,uncertain={}}
 local function immediate(ctx) (ctx.request_immediate_update or ctx.request_update)() end
 function M.init(ctx)
- state={expanded={},page=1,saving=false,syncing=false,uncertain={}}
+ state={expanded={},sort_mode="time",page=1,saving=false,syncing=false,uncertain={}}
  state.adapter=DidaAPI.new({http=ctx.http,config=ctx.config,secrets=ctx.secrets,cache=ctx.cache,log=ctx.log,now=ctx.now,offset=ctx.config.data.utc_offset_minutes or 480})
  local cached=ctx.cache:read('dida')
  if cached and cached.data and DidaAPI.valid_cached_view(cached.data.view) then state.view=cached.data.view;state.cached_at=cached.fetched_at end
@@ -51,6 +51,14 @@ local function find_task(view,target)
  for _,bucket in ipairs({'overdue','today','upcoming','undated'}) do local t=visit(view and view[bucket]);if t then return t end end
 end
 function M.on_action(ctx,action)
+ if action.kind=='sort' then
+  if (action.mode=='time' or action.mode=='priority') and state.sort_mode~=action.mode then
+   state.sort_mode=action.mode
+   state.page=1
+   immediate(ctx)
+  end
+  return
+ end
  if action.kind=='page' then state.page=math.max(1,state.page+(action.delta or 0));immediate(ctx);return end
  if action.kind=='expand' then state.expanded[action.key]=not state.expanded[action.key];immediate(ctx);return end
  if action.kind~='complete' then return end
@@ -94,13 +102,27 @@ local function rows_for(view,ctx,selected)
   end
  end
  local today=timeutil.date_key(ctx.now(),ctx.config.data.utc_offset_minutes or 480)
- add(selected or require('services.today_tasks').select(view,today),0)
+ add(selected or require('services.today_tasks').select(view,today,ctx.config.data.utc_offset_minutes or 480,state.sort_mode),0)
  return rows
 end
 function M.render(ctx,ui,rect,opts)
  local t=ui.theme;local micro=t.type.micro
  -- Background refresh is registered first so row controls have precedence.
  ui:hit(rect,'module_sync','dida','dida-sync')
+ local header=opts and opts.title_rect
+ if header and header.w>=570 then
+  local button_w=182
+  for i,choice in ipairs({{mode='time',label='按时间排序'},{mode='priority',label='按重要程度排序'}}) do
+   local box={x=header.x+header.w-(3-i)*button_w,y=header.y,w=button_w,h=header.h}
+   local active=state.sort_mode==choice.mode
+   local color=active and t.colors.ink or t.colors.muted
+   ui:text({text=choice.label,x=box.x,y=box.y,w=box.w,size=micro,align='center',color=color})
+   if active then
+    ui:fill({x=box.x+12,y=box.y+ui.typo:line_height(micro),w=box.w-24,h=t.line},color)
+   end
+   ui:hit(box,'module_action',{module='dida',kind='sort',mode=choice.mode},'task-sort-'..choice.mode)
+  end
+ end
  if not state.view then
   ui:empty(rect,'暂无任务数据')
   ui:text({text=state.error and '请检查令牌与网络，点击刷新' or '等待首次同步',x=rect.x,y=rect.y+rect.h-ui.typo:line_height(micro),w=rect.w,size=micro})
@@ -108,7 +130,7 @@ function M.render(ctx,ui,rect,opts)
  end
  local view=state.view
  local today=timeutil.date_key(ctx.now(),ctx.config.data.utc_offset_minutes or 480)
- local selected=require('services.today_tasks').select(view,today)
+ local selected=require('services.today_tasks').select(view,today,ctx.config.data.utc_offset_minutes or 480,state.sort_mode)
  local pending=require('services.today_tasks').pending_count(selected)
  local done=view.today_completed or 0
  if view.synced_at and timeutil.date_key(view.synced_at,ctx.config.data.utc_offset_minutes or 480)~=today then done=0 end

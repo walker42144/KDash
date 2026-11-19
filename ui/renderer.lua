@@ -219,6 +219,7 @@ function Renderer:draw_card(record, rect, page, clear)
     record.inst.__ctx.page_id = page and page.id
     local ok, err = pcall(record.inst.render, record.inst.__ctx, ui, content, {
         page_id = page and page.id,
+        title_rect = content ~= rect and {x=rect.x,y=rect.y,w=rect.w,h=content.y-rect.y} or nil,
         detail = page and page.detail == true,
         overview = page and page.overview == true,
         language = self:lang(),
